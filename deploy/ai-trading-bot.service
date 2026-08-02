@@ -1,0 +1,13 @@
+[Unit]
+Description=AI Trading Bot
+After=network-online.target
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/AI-Trading-Bot
+EnvironmentFile=/home/ubuntu/AI-Trading-Bot/.env
+ExecStart=/home/ubuntu/AI-Trading-Bot/.venv/bin/python -m app.main
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target
