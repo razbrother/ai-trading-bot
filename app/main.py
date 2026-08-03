@@ -1,90 +1,335 @@
-import argparse, asyncio, logging
+import argparse
+import asyncio
+import logging
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot
-from telegram.ext import Application,CommandHandler
-from app.settings import settings
+from telegram.ext import Application, CommandHandler
+
+from app.ai import DualConsensus, GeminiAI, HeuristicAI, OpenAITrader
+from app.broker import GrowwBroker, PaperBroker
 from app.db import DB
-from app.ai import GeminiAI,OpenAITrader,HeuristicAI,DualConsensus
-from app.risk import Risk
-from app.broker import PaperBroker,GrowwBroker
 from app.engine import Engine
-from app.models import Mode
-from app.runtime import RuntimeOptions,build_sources
 from app.health import HealthService
-from app.telegram_console import Confirmations,settings_text
+from app.models import Mode
+from app.risk import Risk
+from app.runtime import RuntimeOptions, build_sources
+from app.settings import settings
+from app.telegram_console import Confirmations, settings_text
 
-logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+# Telegram's HTTP URLs contain the bot token. Do not expose them in normal logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
 
-def args():
-    p=argparse.ArgumentParser()
-    p.add_argument("--mode",choices=["paper","live"],default=settings.trading_mode.value.lower())
-    p.add_argument("--market-source",choices=["mock","groww"],default=settings.market_source)
-    p.add_argument("--news-source",choices=["none","json","gdelt"],default=settings.news_source)
-    p.add_argument("--history-source",choices=["none","groww"],default=settings.history_source)
-    return p.parse_args()
 
-async def run():
-    a=args();mode=Mode(a.mode.upper());settings.trading_mode=mode
-    if not settings.telegram_bot_token:raise SystemExit("TELEGRAM_BOT_TOKEN missing")
-    broker=PaperBroker() if mode==Mode.PAPER else GrowwBroker()
-    market,news,history=build_sources(RuntimeOptions(mode,a.market_source,a.news_source,a.history_source),broker)
-    ai=DualConsensus(GeminiAI(),OpenAITrader()) if settings.gemini_api_key and settings.openai_api_key \
-       else DualConsensus(HeuristicAI("gemini-test"),HeuristicAI("openai-test"))
-    bot=Bot(settings.telegram_bot_token)
-    async def notify(t):
+def args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--mode",
+        choices=["paper", "live"],
+        default=settings.trading_mode.value.lower(),
+    )
+    parser.add_argument(
+        "--market-source",
+        choices=["mock", "groww"],
+        default=settings.market_source,
+    )
+    parser.add_argument(
+        "--news-source",
+        choices=["none", "json", "gdelt"],
+        default=settings.news_source,
+    )
+    parser.add_argument(
+        "--history-source",
+        choices=["none", "groww"],
+        default=settings.history_source,
+    )
+    return parser.parse_args()
+
+
+async def run() -> None:
+    cli = args()
+    mode = Mode(cli.mode.upper())
+    settings.trading_mode = mode
+
+    opts = RuntimeOptions(
+        mode=mode,
+        market_source=cli.market_source,
+        news_source=cli.news_source,
+        history_source=cli.history_source,
+    )
+
+    if not settings.telegram_bot_token:
+        raise SystemExit("TELEGRAM_BOT_TOKEN missing")
+
+    # Keep execution and data access independent. This permits real Groww data
+    # with simulated PaperBroker execution.
+    execution_broker = PaperBroker() if mode == Mode.PAPER else GrowwBroker()
+    data_broker = execution_broker
+    if mode == Mode.PAPER and (
+        cli.market_source == "groww" or cli.history_source == "groww"
+    ):
+        data_broker = GrowwBroker()
+
+    market, news, history = build_sources(opts, data_broker)
+
+    ai = (
+        DualConsensus(GeminiAI(), OpenAITrader())
+        if settings.gemini_api_key and settings.openai_api_key
+        else DualConsensus(
+            HeuristicAI("gemini-test"),
+            HeuristicAI("openai-test"),
+        )
+    )
+
+    bot = Bot(settings.telegram_bot_token)
+
+    async def notify(text: str) -> None:
         if settings.telegram_allowed_user_id:
-            try:await bot.send_message(settings.telegram_allowed_user_id,t[:4000])
-            except Exception:logging.exception("notify")
-        else:logging.info("NOTIFY %s",t)
-    e=Engine(market,news,history,ai,Risk(),broker,DB(),notify)
-    health=HealthService(e,opts);confirm=Confirmations()
-    app=Application.builder().token(settings.telegram_bot_token).build()
-    def auth(u):return u.effective_user and (settings.telegram_allowed_user_id is None or
-      u.effective_user.id==settings.telegram_allowed_user_id)
-    async def start(u,c):
-        if auth(u):await u.message.reply_text(
-          f"AI bot | mode={mode.value} market={a.market_source} news={a.news_source} history={a.history_source}")
-    async def whoami(u,c):await u.message.reply_text(str(u.effective_user.id))
-    async def status(u,c):
-        if auth(u):await u.message.reply_text(
-          f"Mode={mode.value} Market={a.market_source} News={a.news_source} History={a.history_source}\n"
-          f"Auto={e.auto} Paused={e.paused} Reason={e.reason or '-'}\n{e.context()}")
-    async def start_auto(u,c):
-        if auth(u):e.auto=True;await u.message.reply_text("Auto enabled")
-    async def stop_auto(u,c):
-        if auth(u):e.auto=False;await u.message.reply_text("New entries stopped")
-    async def emergency(u,c):
-        if auth(u):e.auto=False;e.paused=True;e.reason="manual emergency";await u.message.reply_text("Emergency stop")
-    async def resume(u,c):
-        if auth(u):
-            try:await e.reconcile();e.paused=False;e.reason="";await u.message.reply_text("Resumed")
-            except Exception as x:await u.message.reply_text("Blocked: "+str(x))
-    async def positions(u,c):
-        if auth(u):await u.message.reply_text(str([x.model_dump(mode="json") for x in e.db.positions()])[:4000])
-    async def report(u,c):
-        if auth(u):await u.message.reply_text(str(e.db.report()))
-    async def decision(u,c):
-        if auth(u):await u.message.reply_text(e.last)
-    async def reconcile(u,c):
-        if auth(u):
-            try:t=await e.reconcile()
-            except Exception as x:t="FAILED "+str(x)
-            await u.message.reply_text(t)
-    async def settings_cmd(u,c):
-        if auth(u):await u.message.reply_text(settings_text(opts))
-    async def health_cmd(u,c):
-        if auth(u):await u.message.reply_text(str(await health.snapshot()))
-    async def watchlist(u,c):
-        if auth(u):await u.message.reply_text("\n".join(f"{i+1}. {x.snapshot.symbol} score={x.score} source={x.snapshot.source}" for i,x in enumerate(e.last_candidates)) or "No scan yet")
-    handlers={"start":start,"whoami":whoami,"status":status,"settings":settings_cmd,"health":health_cmd,"watchlist":watchlist,"start_auto":start_auto,
-      "stop_auto":stop_auto,"emergency":emergency,"resume":resume,"positions":positions,
-      "report":report,"decision":decision,"reconcile":reconcile}
-    for n,f in handlers.items():app.add_handler(CommandHandler(n,f))
-    sch=AsyncIOScheduler(timezone=settings.timezone)
-    sch.add_job(e.scan,"interval",seconds=settings.scan_interval_seconds,max_instances=1,coalesce=True)
-    sch.add_job(e.monitor,"interval",seconds=settings.position_check_seconds,max_instances=1,coalesce=True)
-    sch.add_job(e.reconcile,"interval",seconds=settings.reconcile_interval_seconds,max_instances=1,coalesce=True)
-    await app.initialize();await app.start();await app.updater.start_polling(drop_pending_updates=True);sch.start()
-    try:await asyncio.Event().wait()
-    finally:sch.shutdown(False);await app.updater.stop();await app.stop();await app.shutdown()
-if __name__=="__main__":asyncio.run(run())
+            try:
+                await bot.send_message(
+                    settings.telegram_allowed_user_id,
+                    text[:4000],
+                )
+            except Exception:
+                logging.exception("Telegram notification failed")
+        else:
+            logging.info("NOTIFY %s", text)
+
+    engine = Engine(
+        market,
+        news,
+        history,
+        ai,
+        Risk(),
+        execution_broker,
+        DB(),
+        notify,
+    )
+    health = HealthService(engine, opts)
+    confirmations = Confirmations()
+
+    app = Application.builder().token(settings.telegram_bot_token).build()
+
+    def authorized(update) -> bool:
+        return bool(
+            update.effective_user
+            and (
+                settings.telegram_allowed_user_id is None
+                or update.effective_user.id == settings.telegram_allowed_user_id
+            )
+        )
+
+    async def reject(update) -> None:
+        if update.message:
+            await update.message.reply_text("Not authorized")
+
+    async def start(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        await update.message.reply_text(
+            f"AI bot | mode={mode.value} market={cli.market_source} "
+            f"news={cli.news_source} history={cli.history_source}"
+        )
+
+    async def whoami(update, context) -> None:
+        await update.message.reply_text(str(update.effective_user.id))
+
+    async def status(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        await update.message.reply_text(
+            f"Mode={mode.value} Market={cli.market_source} "
+            f"News={cli.news_source} History={cli.history_source}\n"
+            f"Auto={engine.auto} Paused={engine.paused} "
+            f"Reason={engine.reason or '-'}\n{engine.context()}"
+        )
+
+    async def start_auto(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        code = confirmations.create(update.effective_user.id, "START")
+        await update.message.reply_text(
+            f"Reply CONFIRM {code} within "
+            f"{settings.telegram_confirm_timeout_seconds} seconds"
+        )
+
+    async def stop_auto(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        engine.auto = False
+        await update.message.reply_text(
+            "New entries stopped; existing positions remain monitored"
+        )
+
+    async def emergency(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        code = confirmations.create(update.effective_user.id, "EMERGENCY")
+        await update.message.reply_text(
+            f"Reply CONFIRM {code} within "
+            f"{settings.telegram_confirm_timeout_seconds} seconds"
+        )
+
+    async def confirm(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        action = confirmations.consume(
+            update.effective_user.id,
+            " ".join(context.args),
+        )
+        if action == "START":
+            engine.auto = True
+            engine.paused = False
+            engine.reason = ""
+            await update.message.reply_text("Auto trading enabled")
+        elif action == "EMERGENCY":
+            engine.auto = False
+            engine.paused = True
+            engine.reason = "manual emergency"
+            await update.message.reply_text(
+                "Emergency pause active. Verify broker positions manually."
+            )
+        else:
+            await update.message.reply_text("Invalid or expired confirmation")
+
+    async def resume(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        try:
+            await engine.reconcile()
+            engine.paused = False
+            engine.reason = ""
+            await update.message.reply_text("Resumed")
+        except Exception as exc:
+            await update.message.reply_text("Blocked: " + str(exc))
+
+    async def positions(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        payload = [x.model_dump(mode="json") for x in engine.db.positions()]
+        await update.message.reply_text(str(payload)[:4000])
+
+    async def report(update, context) -> None:
+        if authorized(update):
+            await update.message.reply_text(str(engine.db.report()))
+        else:
+            await reject(update)
+
+    async def decision(update, context) -> None:
+        if authorized(update):
+            await update.message.reply_text(engine.last)
+        else:
+            await reject(update)
+
+    async def reconcile(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        try:
+            text = await engine.reconcile()
+        except Exception as exc:
+            text = "FAILED " + str(exc)
+        await update.message.reply_text(text)
+
+    async def settings_cmd(update, context) -> None:
+        if authorized(update):
+            await update.message.reply_text(settings_text(opts))
+        else:
+            await reject(update)
+
+    async def health_cmd(update, context) -> None:
+        if authorized(update):
+            await update.message.reply_text(str(await health.snapshot()))
+        else:
+            await reject(update)
+
+    async def watchlist(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        text = "\n".join(
+            f"{index + 1}. {candidate.snapshot.symbol} "
+            f"score={candidate.score} source={candidate.snapshot.source}"
+            for index, candidate in enumerate(engine.last_candidates)
+        )
+        await update.message.reply_text(text or "No scan yet")
+
+    handlers = {
+        "start": start,
+        "whoami": whoami,
+        "status": status,
+        "settings": settings_cmd,
+        "health": health_cmd,
+        "watchlist": watchlist,
+        "start_auto": start_auto,
+        "stop_auto": stop_auto,
+        "pause": stop_auto,
+        "emergency": emergency,
+        "confirm": confirm,
+        "resume": resume,
+        "positions": positions,
+        "report": report,
+        "decision": decision,
+        "reconcile": reconcile,
+    }
+    for name, handler in handlers.items():
+        app.add_handler(CommandHandler(name, handler))
+
+    scheduler = AsyncIOScheduler(timezone=settings.timezone)
+    scheduler.add_job(
+        engine.scan,
+        "interval",
+        seconds=settings.scan_interval_seconds,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        engine.monitor,
+        "interval",
+        seconds=settings.position_check_seconds,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        engine.reconcile,
+        "interval",
+        seconds=settings.reconcile_interval_seconds,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    scheduler.start()
+    logging.info(
+        "Bot started: mode=%s market=%s news=%s history=%s",
+        mode.value,
+        cli.market_source,
+        cli.news_source,
+        cli.history_source,
+    )
+    try:
+        await asyncio.Event().wait()
+    finally:
+        scheduler.shutdown(False)
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+
+
+if __name__ == "__main__":
+    asyncio.run(run())
