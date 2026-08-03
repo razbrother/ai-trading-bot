@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     entry_start:str="09:25"; last_entry:str="14:45"; force_exit:str="15:10"
     scan_interval_seconds:int=300; position_check_seconds:int=5
     reconcile_interval_seconds:int=30; paper_slippage_bps:float=5; paper_cost_bps:float=12
-    market_source:str="mock"; news_source:str="none"; history_source:str="groww"
+    market_source:str="mock"; news_source:str="none"; history_source:str="none"
     require_news_for_entry:bool=False; require_history_for_entry:bool=True
     min_history_candles:int=100; max_news_age_minutes:int=60
     max_market_data_age_seconds:int=15; allow_mock_paper_only:bool=True
