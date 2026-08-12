@@ -52,6 +52,27 @@ def args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def build_ai() -> DualConsensus:
+    primary = GeminiAI() if settings.gemini_api_key else HeuristicAI("gemini-test")
+    if settings.openai_api_key:
+        secondary = OpenAITrader()
+    elif settings.gemini_api_key:
+        # No second real provider configured yet. Both slots run Gemini so the
+        # pipeline is usable while testing, but this weakens the dual-AI
+        # agreement check - the same model evaluates the same data twice, so
+        # "both models agreed" is not independent validation until a real
+        # second provider (Groq, OpenAI, etc.) replaces this.
+        logging.warning(
+            "OPENAI_API_KEY not set: running dual-AI consensus with Gemini on "
+            "both sides. Agreement score no longer reflects independent "
+            "model validation."
+        )
+        secondary = GeminiAI()
+    else:
+        secondary = HeuristicAI("openai-test")
+    return DualConsensus(primary, secondary)
+
+
 async def run() -> None:
     cli = args()
     mode = Mode(cli.mode.upper())
@@ -81,14 +102,7 @@ async def run() -> None:
 
     market, news, history = build_sources(opts, data_broker)
 
-    ai = (
-        DualConsensus(GeminiAI(), OpenAITrader())
-        if settings.gemini_api_key and settings.openai_api_key
-        else DualConsensus(
-            HeuristicAI("gemini-test"),
-            HeuristicAI("openai-test"),
-        )
-    )
+    ai = build_ai()
 
     bot = Bot(settings.telegram_bot_token)
 
