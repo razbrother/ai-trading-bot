@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     scan_interval_seconds:int=300; position_check_seconds:int=5
     reconcile_interval_seconds:int=30; paper_slippage_bps:float=5; paper_cost_bps:float=12
     live_cost_bps:float=20
+    groww_indicator_cache_seconds:int=60; groww_indicator_candle_days:int=5
     market_source:str="mock"; news_source:str="none"; history_source:str="none"
     require_news_for_entry:bool=False; require_history_for_entry:bool=True
     min_history_candles:int=100; max_news_age_minutes:int=60
