@@ -88,7 +88,12 @@ class Engine:
                 costs=(p.avg_price+ep)*p.qty*cost_bps/10000
                 net=self.db.close(p,ep,costs,reason);await self.notify(f"EXIT {p.symbol} net ₹{net:.2f}")
     async def reconcile(self):
-        bp={x.symbol:x for x in await self.broker.positions()};ip={x.symbol:x for x in self.db.positions()}
+        # Only reconcile symbols this bot actually trades (its configured universe,
+        # plus anything already in its own DB). Holdings in other symbols are the
+        # account owner's business, not this bot's, and are ignored entirely.
+        ip={x.symbol:x for x in self.db.positions()}
+        tracked=set(x.symbol for x in settings.instruments)|set(ip)
+        bp={x.symbol:x for x in await self.broker.positions() if x.symbol in tracked}
         if set(bp)!=set(ip):
             self.paused=True;self.reason=f"reconcile mismatch broker={list(bp)} internal={list(ip)}"
             await self.notify("EMERGENCY PAUSE\n"+self.reason);raise RuntimeError(self.reason)

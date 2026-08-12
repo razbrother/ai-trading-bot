@@ -40,3 +40,46 @@ async def test_monitor_uses_live_cost_bps_in_live_mode(tmp_path,monkeypatch):
     engine=Engine(FixedMarket(110),None,None,None,None,PaperBroker(),db,notify)
     await engine.monitor()
     assert db.report()["net"]<0
+
+class FakeBroker:
+    def __init__(self,positions):self._positions=positions
+    async def positions(self):return self._positions
+
+def bp(symbol,qty,side=Action.BUY,avg=100):
+    return Position(symbol=symbol,qty=qty,side=side,avg_price=avg,stop=0,target=0,
+      opened_at=datetime.now(settings.tz))
+
+@pytest.mark.asyncio
+async def test_reconcile_ignores_positions_outside_trading_universe(tmp_path,monkeypatch):
+    monkeypatch.setattr(settings,"symbols","SBIN:3045")
+    db=DB(path=str(tmp_path/"t3.db"))
+    broker=FakeBroker([bp("KALYANKJIL",295,Action.SELL),bp("AETHER",90,Action.BUY)])
+    async def notify(t):pass
+    engine=Engine(None,None,None,None,None,broker,db,notify)
+    assert await engine.reconcile()=="reconciliation OK"
+    assert not engine.paused
+
+@pytest.mark.asyncio
+async def test_reconcile_still_pauses_on_mismatch_within_universe(tmp_path,monkeypatch):
+    monkeypatch.setattr(settings,"symbols","SBIN:3045")
+    db=DB(path=str(tmp_path/"t4.db"))
+    broker=FakeBroker([bp("SBIN",5),bp("KALYANKJIL",295,Action.SELL)])
+    notes=[]
+    async def notify(t):notes.append(t)
+    engine=Engine(None,None,None,None,None,broker,db,notify)
+    with pytest.raises(RuntimeError):
+        await engine.reconcile()
+    assert engine.paused
+    assert any("EMERGENCY PAUSE" in n for n in notes)
+
+@pytest.mark.asyncio
+async def test_reconcile_ok_when_tracked_positions_match(tmp_path,monkeypatch):
+    monkeypatch.setattr(settings,"symbols","SBIN:3045")
+    db=DB(path=str(tmp_path/"t5.db"))
+    db.save_pos(Position(symbol="SBIN",qty=5,side=Action.BUY,avg_price=100,stop=98,target=104,
+      opened_at=datetime.now(settings.tz)))
+    broker=FakeBroker([bp("SBIN",5,Action.BUY),bp("AETHER",90,Action.BUY)])
+    async def notify(t):pass
+    engine=Engine(None,None,None,None,None,broker,db,notify)
+    assert await engine.reconcile()=="reconciliation OK"
+    assert not engine.paused
