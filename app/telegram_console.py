@@ -9,7 +9,11 @@ class Confirmations:
         if not x:return None
         action,code,t=x
         if time.time()-t>settings.telegram_confirm_timeout_seconds:self.p.pop(uid,None);return None
-        if text.strip().upper()==f'CONFIRM {code}':self.p.pop(uid,None);return action
+        normalized=text.strip().upper()
+        # /confirm <code> is the only reachable form (Telegram CommandHandlers only
+        # fire on slash commands), but "CONFIRM <code>" is accepted too in case a
+        # message-handler is ever added for plain-text replies.
+        if normalized in (code,f'CONFIRM {code}'):self.p.pop(uid,None);return action
         return None
 
 def settings_text(opts):

@@ -167,7 +167,7 @@ async def run() -> None:
             return
         code = confirmations.create(update.effective_user.id, "START")
         await update.message.reply_text(
-            f"Reply CONFIRM {code} within "
+            f"Reply /confirm {code} within "
             f"{settings.telegram_confirm_timeout_seconds} seconds"
         )
 
@@ -186,7 +186,7 @@ async def run() -> None:
             return
         code = confirmations.create(update.effective_user.id, "EMERGENCY")
         await update.message.reply_text(
-            f"Reply CONFIRM {code} within "
+            f"Reply /confirm {code} within "
             f"{settings.telegram_confirm_timeout_seconds} seconds"
         )
 
