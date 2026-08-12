@@ -57,3 +57,4 @@ class BrokerOrder(BaseModel):
 class Position(BaseModel):
     symbol:str; qty:int; side:Action; avg_price:float; stop:float; target:float
     opened_at:datetime; broker_id:str|None=None; ltp:float|None=None; upnl:float=0
+    stop_order_id:str|None=None

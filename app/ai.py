@@ -2,6 +2,7 @@ import asyncio,json
 from pydantic import BaseModel,Field,model_validator
 from app.settings import settings
 from app.models import Decision,Action
+from app.rate_limit import DailyCallLimiter
 RULES='Use only supplied verified JSON. Select one candidate or HOLD. Do not invent prices/news/history. For BUY stop<entry<target; SELL target<entry<stop. Confidence is not probability. Never set quantity or override controls.'
 class Selection(BaseModel):
     decision:Decision;selected_rank:int|None=Field(default=None,ge=1)
@@ -16,14 +17,18 @@ class HeuristicAI:
         c=cs[0];s=c.snapshot
         return Selection(selected_rank=1,decision=Decision(action='BUY',symbol=s.symbol,entry=s.ltp,stop=round(s.ltp-s.atr,2),target=round(s.ltp+1.8*s.atr,2),confidence=.86,reasons=c.reasons,rationale=self.name))
 class GeminiAI:
+    def __init__(self):self.limiter=DailyCallLimiter(settings.gemini_max_calls_per_day,settings.tz)
     async def select(self,cs,ctx):
+        await self.limiter.acquire('Gemini')
         from google import genai
         client=genai.Client(api_key=settings.gemini_api_key);payload={'candidates':[c.model_dump(mode='json') for c in cs],'context':ctx}
         def f():
             x=client.interactions.create(model=settings.gemini_model,input=RULES+'\n'+json.dumps(payload,default=str),response_format={'type':'text','mime_type':'application/json','schema':Selection.model_json_schema()});return Selection.model_validate_json(x.output_text)
         return await asyncio.to_thread(f)
 class OpenAITrader:
+    def __init__(self):self.limiter=DailyCallLimiter(settings.openai_max_calls_per_day,settings.tz)
     async def select(self,cs,ctx):
+        await self.limiter.acquire('OpenAI')
         from openai import OpenAI
         client=OpenAI(api_key=settings.openai_api_key);payload={'candidates':[c.model_dump(mode='json') for c in cs],'context':ctx}
         def f():

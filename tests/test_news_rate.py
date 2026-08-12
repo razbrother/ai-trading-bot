@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime
-from app.rate_limit import RollingRateLimiter
+from app.rate_limit import RollingRateLimiter,DailyCallLimiter
 from app.gdelt_news import GDELTNewsProvider
 from app.context_data import NewsContext,DataProvenance
 from app.settings import settings
@@ -8,6 +8,10 @@ from app.settings import settings
 async def test_limiter():
     r=RollingRateLimiter(2,10);await r.acquire();await r.acquire()
     assert len(r.s)==2 and len(r.m)==2
+@pytest.mark.asyncio
+async def test_daily_call_limiter_caps():
+    lim=DailyCallLimiter(2,settings.tz);await lim.acquire();await lim.acquire()
+    with pytest.raises(RuntimeError):await lim.acquire()
 def test_news_terms():
     assert settings.news_term_map["SBIN"]=="State Bank of India"
 @pytest.mark.asyncio

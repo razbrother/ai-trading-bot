@@ -1,11 +1,10 @@
-import os
-os.environ["ENTRY_START"]="00:00";os.environ["LAST_ENTRY"]="23:59"
 from datetime import datetime
 import pytest
 from app.settings import settings
 from app.models import Snapshot,Candidate,Decision,ValidOrder
 from app.risk import Risk,Reject
 from app.broker import PaperBroker
+settings.entry_start="00:00";settings.last_entry="23:59"
 
 def cand():
     s=Snapshot(symbol="SBIN",timestamp=datetime.now(settings.tz),ltp=100,open=98,high=102,low=97,

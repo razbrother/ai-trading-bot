@@ -113,6 +113,16 @@ async def run() -> None:
     health = HealthService(engine, opts)
     confirmations = Confirmations()
 
+    if mode == Mode.LIVE:
+        if settings.require_telegram_user_lock_in_live and settings.telegram_allowed_user_id is None:
+            raise SystemExit("LIVE blocked: TELEGRAM_ALLOWED_USER_ID must be set")
+        if settings.require_live_health_pass:
+            snapshot = await health.snapshot()
+            if not snapshot["live_ready"]:
+                raise SystemExit(f"LIVE blocked: health checks failed {snapshot['checks']}")
+        if settings.live_require_startup_reconciliation:
+            await engine.reconcile()
+
     app = Application.builder().token(settings.telegram_bot_token).build()
 
     def authorized(update) -> bool:

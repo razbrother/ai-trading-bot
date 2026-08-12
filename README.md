@@ -4,7 +4,9 @@ A paper-first Telegram-controlled AI trading framework using Gemini, OpenAI and 
 
 ## Important
 
-The delivered build defaults to `PAPER` and uses a simulated market feed. The Groww live adapter deliberately blocks live position reconciliation and exits until those account-specific SDK responses are verified. Therefore **this package cannot accidentally become an unattended live bot by changing one flag**.
+The delivered build defaults to `PAPER` and uses a simulated market feed. `LIVE` mode additionally requires `LIVE_TRADING_UNLOCK=true` and `LIVE_ACK=I_ACCEPT_REAL_MONEY_RISK`, so **this package cannot accidentally become an unattended live bot by changing one flag**.
+
+Live position reconciliation, exits and broker-side stop-loss placement are implemented against the official Groww SDK methods (`app/groww_execution.py`, wired into `app/broker.py`), but the exact response field names (e.g. the average-price field on a positions response) are inferred from SDK conventions used elsewhere in this codebase and **have not been verified against a live Groww account**. Run the read-only probe (`scripts/groww_live_probe.py`) and complete controlled one-share lifecycle tests (checklist below) before trusting real money to it. If the SDK returns an unrecognized field, the code raises rather than guessing.
 
 ## Setup
 
@@ -96,7 +98,7 @@ Live mode is rejected when `--market-source mock` is supplied.
 
 
 ## Production candidate
-Both models independently select from top candidates. Telegram supports status/settings/health/watchlist. Own trade evidence is supplied but is not treated as probability. Live order exits/positions remain intentionally blocked until account-level Groww integration tests are completed.
+Both models independently select from top candidates. Telegram supports status/settings/health/watchlist. Own trade evidence is supplied but is not treated as probability. Live order exits/positions are implemented but unverified against a real account — complete the live integration checklist before enabling `LIVE` mode.
 
 
 ## Groww live verification layer

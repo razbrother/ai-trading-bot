@@ -1,9 +1,9 @@
 from __future__ import annotations
-import asyncio
 from datetime import datetime
 from app.settings import settings
 from app.models import Snapshot
 from app.market import score
+from app import groww_limits
 
 class GrowwMarket:
     def __init__(self, groww_api): self.api=groww_api
@@ -15,7 +15,7 @@ class GrowwMarket:
                 segment=instrument.segment,
                 trading_symbol=instrument.symbol,
             )
-        q=await asyncio.to_thread(call)
+        q=await groww_limits.call(groww_limits.live,call)
         # Common field aliases are accepted, but all essential values remain mandatory.
         def req(*names):
             for n in names:

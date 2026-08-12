@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 from app.settings import settings
-from app.models import Action,Position,Status
+from app.models import Action,Mode,Position,Status
 from app.market import score
 from app.risk import Reject
 from app.data_policy import validate_entry_context, DataPolicyError
@@ -63,11 +63,16 @@ class Engine:
             filled=await self.verify(await self.broker.enter(o))
             pos=Position(symbol=o.symbol,qty=o.qty,side=o.action,avg_price=filled.avg_price or o.entry,
               stop=o.stop,target=o.target,opened_at=datetime.now(settings.tz),broker_id=filled.broker_id)
+            pos.stop_order_id=await self.broker.place_protective_stop(pos)
             self.db.save_pos(pos);await self.notify(f"ENTRY {pos.side.value} {pos.qty} {pos.symbol} @ {pos.avg_price}")
             return "opened "+pos.symbol
     async def monitor(self):
         for p in self.db.positions():
-            i=next(x for x in settings.instruments if x.symbol==p.symbol);s=await self.market.snapshot(i)
+            i=next((x for x in settings.instruments if x.symbol==p.symbol),None)
+            if i is None:
+                self.paused=True;self.reason=f"position {p.symbol} has no matching instrument in SYMBOLS"
+                await self.notify("EMERGENCY PAUSE\n"+self.reason);continue
+            s=await self.market.snapshot(i)
             p.ltp=s.ltp;p.upnl=((s.ltp-p.avg_price) if p.side==Action.BUY else (p.avg_price-s.ltp))*p.qty
             self.db.save_pos(p);reason=None
             if p.side==Action.BUY:
@@ -79,7 +84,8 @@ class Engine:
             if datetime.now(settings.tz).time()>=settings.tm(settings.force_exit):reason="FORCE_EXIT"
             if reason:
                 x=await self.verify(await self.broker.exit(p,s.ltp,reason));ep=x.avg_price or s.ltp
-                costs=(p.avg_price+ep)*p.qty*settings.paper_cost_bps/10000
+                cost_bps=settings.paper_cost_bps if settings.trading_mode==Mode.PAPER else settings.live_cost_bps
+                costs=(p.avg_price+ep)*p.qty*cost_bps/10000
                 net=self.db.close(p,ep,costs,reason);await self.notify(f"EXIT {p.symbol} net ₹{net:.2f}")
     async def reconcile(self):
         bp={x.symbol:x for x in await self.broker.positions()};ip={x.symbol:x for x in self.db.positions()}
