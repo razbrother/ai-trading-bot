@@ -225,9 +225,19 @@ async def run() -> None:
             engine.auto = False
             engine.paused = True
             engine.reason = "manual emergency"
-            await update.message.reply_text(
-                "Emergency pause active. Verify broker positions manually."
-            )
+            try:
+                closed = await engine.close_all("EMERGENCY")
+                text = (
+                    f"Emergency pause active. Closed: {', '.join(closed)}."
+                    if closed
+                    else "Emergency pause active. No open positions to close."
+                )
+            except Exception as exc:
+                text = (
+                    "Emergency pause active, but closing positions failed: "
+                    f"{exc}. Verify broker positions manually."
+                )
+            await update.message.reply_text(text)
         else:
             await update.message.reply_text("Invalid or expired confirmation")
 

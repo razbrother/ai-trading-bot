@@ -83,3 +83,38 @@ async def test_reconcile_ok_when_tracked_positions_match(tmp_path,monkeypatch):
     engine=Engine(None,None,None,None,None,broker,db,notify)
     assert await engine.reconcile()=="reconciliation OK"
     assert not engine.paused
+
+@pytest.mark.asyncio
+async def test_close_all_closes_every_open_position(tmp_path,monkeypatch):
+    monkeypatch.setattr(settings,"symbols","SBIN:3045,TCS:11536")
+    db=DB(path=str(tmp_path/"t6.db"))
+    db.save_pos(Position(symbol="SBIN",qty=5,side=Action.BUY,avg_price=100,stop=98,target=104,
+      opened_at=datetime.now(settings.tz)))
+    db.save_pos(Position(symbol="TCS",qty=2,side=Action.SELL,avg_price=200,stop=210,target=190,
+      opened_at=datetime.now(settings.tz)))
+    notes=[]
+    async def notify(t):notes.append(t)
+    from app.broker import PaperBroker
+    engine=Engine(FixedMarket(100),None,None,None,None,PaperBroker(),db,notify)
+    closed=await engine.close_all("EMERGENCY")
+    assert set(closed)=={"SBIN","TCS"}
+    assert not db.positions()
+    with db.conn() as c:
+        reasons=[r["reason"] for r in c.execute("SELECT reason FROM trades").fetchall()]
+    assert reasons==["EMERGENCY","EMERGENCY"]
+    assert any("EXIT SBIN" in n for n in notes) and any("EXIT TCS" in n for n in notes)
+
+@pytest.mark.asyncio
+async def test_close_all_skips_position_with_no_instrument_and_warns(tmp_path,monkeypatch):
+    monkeypatch.setattr(settings,"symbols","SBIN:3045")
+    db=DB(path=str(tmp_path/"t7.db"))
+    db.save_pos(Position(symbol="NOTLISTED",qty=1,side=Action.BUY,avg_price=100,stop=98,target=104,
+      opened_at=datetime.now(settings.tz)))
+    notes=[]
+    async def notify(t):notes.append(t)
+    from app.broker import PaperBroker
+    engine=Engine(FixedMarket(100),None,None,None,None,PaperBroker(),db,notify)
+    closed=await engine.close_all("EMERGENCY")
+    assert closed==[]
+    assert db.positions()
+    assert any("WARNING" in n and "NOTLISTED" in n for n in notes)

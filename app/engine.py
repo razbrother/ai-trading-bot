@@ -66,6 +66,12 @@ class Engine:
             pos.stop_order_id=await self.broker.place_protective_stop(pos)
             self.db.save_pos(pos);await self.notify(f"ENTRY {pos.side.value} {pos.qty} {pos.symbol} @ {pos.avg_price}")
             return "opened "+pos.symbol
+    async def _close_position(self,p,ltp,reason):
+        x=await self.verify(await self.broker.exit(p,ltp,reason));ep=x.avg_price or ltp
+        cost_bps=settings.paper_cost_bps if settings.trading_mode==Mode.PAPER else settings.live_cost_bps
+        costs=(p.avg_price+ep)*p.qty*cost_bps/10000
+        net=self.db.close(p,ep,costs,reason);await self.notify(f"EXIT {p.symbol} net ₹{net:.2f}")
+        return net
     async def monitor(self):
         for p in self.db.positions():
             i=next((x for x in settings.instruments if x.symbol==p.symbol),None)
@@ -82,11 +88,18 @@ class Engine:
                 if s.ltp>=p.stop:reason="STOP"
                 elif s.ltp<=p.target:reason="TARGET"
             if datetime.now(settings.tz).time()>=settings.tm(settings.force_exit):reason="FORCE_EXIT"
-            if reason:
-                x=await self.verify(await self.broker.exit(p,s.ltp,reason));ep=x.avg_price or s.ltp
-                cost_bps=settings.paper_cost_bps if settings.trading_mode==Mode.PAPER else settings.live_cost_bps
-                costs=(p.avg_price+ep)*p.qty*cost_bps/10000
-                net=self.db.close(p,ep,costs,reason);await self.notify(f"EXIT {p.symbol} net ₹{net:.2f}")
+            if reason:await self._close_position(p,s.ltp,reason)
+    async def close_all(self,reason="EMERGENCY"):
+        closed=[]
+        for p in self.db.positions():
+            i=next((x for x in settings.instruments if x.symbol==p.symbol),None)
+            if i is None:
+                await self.notify(f"WARNING: cannot price {p.symbol} for {reason} close "
+                  "(no matching instrument in SYMBOLS); close it manually in the broker app")
+                continue
+            s=await self.market.snapshot(i)
+            await self._close_position(p,s.ltp,reason);closed.append(p.symbol)
+        return closed
     async def reconcile(self):
         # Only reconcile symbols this bot actually trades (its configured universe,
         # plus anything already in its own DB). Holdings in other symbols are the
