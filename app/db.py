@@ -17,9 +17,15 @@ class DB:
     def __init__(self,path=None):
         self.path=path or settings.database_path
         Path(self.path).parent.mkdir(parents=True,exist_ok=True)
-        with self.conn() as c:c.executescript(SCHEMA)
+        self._conn=sqlite3.connect(self.path)
+        self._conn.row_factory=sqlite3.Row
+        with self._conn:self._conn.executescript(SCHEMA)
     def conn(self):
-        c=sqlite3.connect(self.path); c.row_factory=sqlite3.Row; return c
+        # A single connection reused for the DB object's lifetime. `with conn() as c`
+        # only manages the transaction (commit/rollback), not the connection itself,
+        # so this stays safe to call repeatedly without leaking file descriptors -
+        # opening a fresh connection per call previously leaked one FD per call.
+        return self._conn
     def event(self,k,p):
         with self.conn() as c:c.execute("INSERT INTO events(ts,kind,payload) VALUES(?,?,?)",
           (datetime.now(timezone.utc).isoformat(),k,json.dumps(p,default=str)))

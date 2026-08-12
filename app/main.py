@@ -15,6 +15,7 @@ from app.models import Mode
 from app.risk import Risk
 from app.runtime import RuntimeOptions, build_sources
 from app.settings import settings
+from app.singleton import SingletonLock
 from app.telegram_console import Confirmations, settings_text
 
 logging.basicConfig(
@@ -55,6 +56,9 @@ async def run() -> None:
     cli = args()
     mode = Mode(cli.mode.upper())
     settings.trading_mode = mode
+
+    lock = SingletonLock(settings.single_instance_lock)
+    lock.acquire()
 
     opts = RuntimeOptions(
         mode=mode,
@@ -339,6 +343,7 @@ async def run() -> None:
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
+        lock.release()
 
 
 if __name__ == "__main__":
