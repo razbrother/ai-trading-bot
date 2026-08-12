@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS orders(local_id TEXT PRIMARY KEY,broker_id TEXT,ts TE
 CREATE TABLE IF NOT EXISTS positions(symbol TEXT PRIMARY KEY,ts TEXT,payload TEXT);
 CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY,symbol TEXT,side TEXT,qty INTEGER,
  entry_time TEXT,exit_time TEXT,entry REAL,exit REAL,gross REAL,costs REAL,net REAL,reason TEXT);
+CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY,value TEXT);
 """
 class DB:
     def __init__(self,path=None):
@@ -54,6 +55,12 @@ class DB:
               datetime.now(timezone.utc).isoformat(),p.avg_price,exit_price,gross,costs,net,reason))
             c.execute("DELETE FROM positions WHERE symbol=?",(p.symbol,))
         return net
+    def get_state(self,key,default=None):
+        with self.conn() as c:r=c.execute("SELECT value FROM state WHERE key=?",(key,)).fetchone()
+        return r["value"] if r else default
+    def set_state(self,key,value):
+        with self.conn() as c:c.execute("""INSERT INTO state(key,value) VALUES(?,?)
+          ON CONFLICT(key) DO UPDATE SET value=excluded.value""",(key,value))
     def today(self,date):
         with self.conn() as c:r=c.execute("""SELECT COUNT(*) n,COALESCE(SUM(net),0) pnl FROM trades
           WHERE substr(exit_time,1,10)=?""",(date,)).fetchone()

@@ -131,6 +131,9 @@ async def run() -> None:
     health = HealthService(engine, opts)
     confirmations = Confirmations()
 
+    if engine.paused:
+        await notify(f"Restored persisted pause from before restart: {engine.reason}")
+
     if mode == Mode.LIVE:
         if settings.require_telegram_user_lock_in_live and settings.telegram_allowed_user_id is None:
             raise SystemExit("LIVE blocked: TELEGRAM_ALLOWED_USER_ID must be set")

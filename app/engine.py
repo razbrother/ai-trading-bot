@@ -11,7 +11,21 @@ from app.learning import PreviousTradeAnalyzer
 class Engine:
     def __init__(self,market,news,history,ai,risk,broker,db,notify):
         self.market=market;self.news=news;self.history=history;self.ai=ai;self.risk=risk;self.broker=broker;self.db=db;self.notify=notify
-        self.auto=settings.auto_start;self.paused=False;self.reason="";self.last="No decision";self.lock=asyncio.Lock();self.learning=PreviousTradeAnalyzer(db);self.last_candidates=[]
+        self.auto=settings.auto_start
+        # paused/reason are DB-backed so an unplanned restart can't silently
+        # erase a safety pause caused by a real problem (anomalies, a reconcile
+        # mismatch). auto is intentionally NOT persisted: every restart requires
+        # an explicit /start_auto + confirm before new entries resume.
+        self._paused=db.get_state("paused","False")=="True";self._reason=db.get_state("reason","")
+        self.last="No decision";self.lock=asyncio.Lock();self.learning=PreviousTradeAnalyzer(db);self.last_candidates=[]
+    @property
+    def paused(self):return self._paused
+    @paused.setter
+    def paused(self,v):self._paused=v;self.db.set_state("paused",str(v))
+    @property
+    def reason(self):return self._reason
+    @reason.setter
+    def reason(self,v):self._reason=v;self.db.set_state("reason",v)
     def context(self):
         n,p=self.db.today(datetime.now(settings.tz).date().isoformat())
         return {"mode":settings.trading_mode.value,"trades_today":n,"pnl":p,
