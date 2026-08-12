@@ -53,16 +53,11 @@ class GrowwBroker:
           "PENDING":Status.OPEN,"REJECTED":Status.REJECTED,"CANCELLED":Status.CANCELLED}.get(
           str(s).upper(),Status.UNKNOWN)
     async def enter(self,o):
-        lid=uuid.uuid4().hex[:16]
-        def f():
-            g=self.g;return g.place_order(trading_symbol=o.symbol,quantity=o.qty,validity=g.VALIDITY_DAY,
-              exchange=g.EXCHANGE_NSE,segment=g.SEGMENT_CASH,product=g.PRODUCT_MIS,
-              order_type=g.ORDER_TYPE_LIMIT,transaction_type=g.TRANSACTION_TYPE_BUY if o.action==Action.BUY
-              else g.TRANSACTION_TYPE_SELL,price=o.entry,order_reference_id=("AI-"+lid)[:20])
-        r=await groww_limits.call(groww_limits.order,f)
-        return BrokerOrder(local_id=lid,broker_id=r.get("groww_order_id"),symbol=o.symbol,action=o.action,
-          qty=o.qty,requested_price=o.entry,status=self.stat(r.get("order_status")),
-          message=r.get("remark",""),updated_at=datetime.now(settings.tz))
+        # Routed through GrowwExecutionClient so LIVE_ORDER_MAX_QTY and
+        # LIVE_REQUIRE_MARGIN_CHECK actually apply - a separate direct
+        # g.place_order() call here previously bypassed both silently.
+        rec=await self.exec.place_entry(o)
+        return self._to_broker_order(rec,o.entry)
     async def get_order(self,bid,lid):
         def f():
             if hasattr(self.g,"get_order_detail"):
