@@ -16,17 +16,22 @@ class GrowwMarket:
                 trading_symbol=instrument.symbol,
             )
         q=await groww_limits.call(groww_limits.live,call)
-        # Common field aliases are accepted, but all essential values remain mandatory.
+        # OHLC arrives nested under "ohlc" on the live API; top-level aliases are
+        # also accepted for forward/backward SDK compatibility. All essential
+        # values remain mandatory - confirmed against a real account response.
+        merged={**(q.get("ohlc") or {}),**q}
         def req(*names):
             for n in names:
-                if q.get(n) is not None:return float(q[n])
+                if merged.get(n) is not None:return float(merged[n])
             raise RuntimeError(f"Groww quote missing required field: {names}")
         ltp=req("last_price","ltp","last_traded_price")
         high=req("high","day_high")
         low=req("low","day_low")
         op=req("open","day_open")
-        bid=float(q.get("bid_price") or q.get("best_bid_price") or ltp)
-        ask=float(q.get("ask_price") or q.get("best_ask_price") or ltp)
+        depth=q.get("depth") or {}
+        buy=(depth.get("buy") or [{}])[0];sell=(depth.get("sell") or [{}])[0]
+        bid=float(buy.get("price") or q.get("bid_price") or q.get("best_bid_price") or ltp)
+        ask=float(sell.get("price") or q.get("ask_price") or q.get("best_ask_price") or ltp)
         # Indicators require candles; placeholder values are forbidden in live mode.
         indicators=q.get("_computed_indicators")
         if not indicators:
