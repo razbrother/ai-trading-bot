@@ -6,6 +6,9 @@ class HealthService:
         checks={'database':True,'telegram_user_lock':settings.telegram_allowed_user_id is not None,
           'market_source_real':self.opts.market_source=='groww','news_configured':self.opts.news_source!='none',
           'history_configured':self.opts.history_source!='none','gemini_key':bool(settings.gemini_api_key),
+          # openai_key is informational only, not gating: build_ai() falls back to a
+          # single-provider (Gemini-only) consensus when it's unset, which is a
+          # supported - if weaker - configuration rather than a health failure.
           'openai_key':bool(settings.openai_api_key),'groww_credentials':bool((settings.groww_totp_token and settings.groww_totp_secret) or (settings.groww_api_key and settings.groww_api_secret))}
-        critical=['database'] if self.opts.mode==Mode.PAPER else ['database','telegram_user_lock','market_source_real','gemini_key','openai_key','groww_credentials']
+        critical=['database'] if self.opts.mode==Mode.PAPER else ['database','telegram_user_lock','market_source_real','gemini_key','groww_credentials']
         return {'checks':checks,'live_ready':all(checks[x] for x in critical)}
