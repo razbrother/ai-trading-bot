@@ -23,6 +23,14 @@ CANDIDATES = [
     "WIPRO","HCLTECH","LTIM","BAJFINANCE","BAJAJFINSV","TITAN","ADANIENT",
     "ADANIPORTS","AMBUJACEM","ACC","GRASIM","UPL","EICHERMOT","BPCL","HDFCAMC",
     "RELIANCE","TCS","INFY","SBIN","ICICIBANK",
+    # Added to widen the candidate pool to 100+ - same bar as above: only
+    # well-known, actively-traded NSE large/mid-caps, still resolved (never
+    # guessed) against Groww's own instrument master before use.
+    "KOTAKBANK","AXISBANK","INDUSINDBK","MARUTI","M&M","HINDUNILVR","NESTLEIND",
+    "ASIANPAINT","DIVISLAB","BRITANNIA","PIDILITIND","ULTRACEMCO","JSWSTEEL",
+    "TATACONSUM","APOLLOHOSP","SBILIFE","LUPIN","AUROPHARMA","BIOCON","TVSMOTOR",
+    "MRF","BOSCHLTD","SIEMENS","ABB","HAL","JINDALSTEL","POLYCAB","HAVELLS",
+    "DIXON","PAGEIND",
 ]
 
 async def scan(api, max_price=1500, count=45, candidates=CANDIDATES):
