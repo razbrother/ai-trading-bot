@@ -3,6 +3,7 @@ import asyncio
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from telegram import Bot
 from telegram.ext import Application, CommandHandler
 
@@ -17,6 +18,7 @@ from app.runtime import RuntimeOptions, build_sources
 from app.settings import settings
 from app.singleton import SingletonLock
 from app.telegram_console import Confirmations, settings_text
+from app import universe
 
 logging.basicConfig(
     level=logging.INFO,
@@ -115,6 +117,29 @@ async def run() -> None:
                 logging.exception("Telegram notification failed")
         else:
             logging.info("NOTIFY %s", text)
+
+    async def refresh_universe() -> None:
+        # Widens the honest scan candidate pool to genuinely NSE-intraday-eligible,
+        # liquid, affordable stocks - it never lowers any entry bar, it just gives
+        # the existing (unchanged) score/AI/risk gates more real candidates to
+        # find a qualifying setup among each day.
+        if not hasattr(data_broker, "g"):
+            return
+        try:
+            symbols, report = await universe.scan(
+                data_broker.g,
+                max_price=settings.universe_max_price,
+                count=settings.universe_count,
+            )
+        except Exception as exc:
+            logging.exception("Daily universe scan failed")
+            await notify(f"Daily universe scan FAILED: {exc}")
+            return
+        if symbols is None:
+            await notify("Daily universe scan: no candidates qualified, keeping current SYMBOLS")
+            return
+        settings.symbols = symbols
+        await notify(f"Daily universe refreshed ({len(symbols.split(','))} symbols):\n{symbols}")
 
     ai = build_ai(notify)
 
@@ -350,6 +375,16 @@ async def run() -> None:
             text = "FAILED " + str(exc)
         await update.message.reply_text(text)
 
+    async def refresh_universe_cmd(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        if not hasattr(data_broker, "g"):
+            await update.message.reply_text("Universe scan requires --market-source groww")
+            return
+        await update.message.reply_text("Scanning...")
+        await refresh_universe()
+
     async def settings_cmd(update, context) -> None:
         if authorized(update):
             await update.message.reply_text(settings_text(opts))
@@ -395,6 +430,7 @@ async def run() -> None:
         "sell": sell,
         "delivery": delivery,
         "ask": ask,
+        "refresh_universe": refresh_universe_cmd,
     }
     for name, handler in handlers.items():
         app.add_handler(CommandHandler(name, handler))
@@ -421,6 +457,14 @@ async def run() -> None:
         max_instances=1,
         coalesce=True,
     )
+    if settings.daily_universe_scan_enabled and hasattr(data_broker, "g"):
+        scan_hour, scan_minute = map(int, settings.daily_universe_scan_time.split(":"))
+        scheduler.add_job(
+            refresh_universe,
+            CronTrigger(hour=scan_hour, minute=scan_minute, timezone=settings.timezone),
+            max_instances=1,
+            coalesce=True,
+        )
 
     await app.initialize()
     await app.start()

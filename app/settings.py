@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     early_invalidation_enabled:bool=True
     early_invalidation_window_seconds:int=Field(default=300,ge=0)
     early_invalidation_risk_fraction:float=Field(default=.5,ge=0,le=1)
+    daily_universe_scan_enabled:bool=False
+    daily_universe_scan_time:str="09:00"
+    universe_max_price:float=Field(default=1500,gt=0)
+    universe_count:int=Field(default=45,gt=0)
     @property
     def tz(self): return ZoneInfo(self.timezone)
     def tm(self,s): h,m=map(int,s.split(":")); return time(h,m)
