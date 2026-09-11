@@ -2,7 +2,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta
 from app.settings import settings
-from app.models import Snapshot
+from app.models import Snapshot,Instrument
 from app import groww_limits, indicators
 
 class GrowwMarket:
@@ -10,6 +10,7 @@ class GrowwMarket:
         self.api=groww_api
         self._ind_cache={}   # symbol -> (monotonic_time, indicators dict)
         self._index_cache=(0.0,None)
+        self._instrument_cache=(0.0,None)   # (monotonic_time, full instrument master)
 
     async def _candle_indicators(self,symbol):
         cached=self._ind_cache.get(symbol)
@@ -83,3 +84,24 @@ class GrowwMarket:
           news_risk="UNKNOWN",source="GROWW_LIVE")
     async def snapshots(self,items):
         return [await self.snapshot(i) for i in items]
+
+    async def _instruments(self):
+        ts,df=self._instrument_cache
+        if df is not None and time.monotonic()-ts<3600:
+            return df
+        df=await groww_limits.call(groww_limits.nontrading,self.api.get_all_instruments)
+        self._instrument_cache=(time.monotonic(),df)
+        return df
+
+    async def resolve(self,symbol):
+        # Ad-hoc symbol lookup for manual /trade and /delivery commands, so a
+        # stock doesn't have to be pre-added to SYMBOLS. Validated against
+        # Groww's own instrument master (NSE cash equity, intraday-tradeable)
+        # rather than trusting free-text input - a typo or non-MIS-eligible
+        # symbol returns None instead of silently reaching the broker.
+        symbol=symbol.upper()
+        df=await self._instruments()
+        eq=df[(df["exchange"]=="NSE")&(df["segment"]=="CASH")&(df["series"]=="EQ")&
+              (df["trading_symbol"]==symbol)&(df["is_intraday"]=="1")&(df["buy_allowed"]=="1")]
+        if eq.empty:return None
+        return Instrument(symbol=symbol,exchange_token=str(eq.iloc[0]["exchange_token"]))

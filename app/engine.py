@@ -49,37 +49,76 @@ class Engine:
             if not cs:return "no data"
             eligible=cs[:settings.top_candidates];self.last_candidates=eligible
             c=eligible[0]
-            anomalies=analyze_snapshot(c.snapshot)
-            if settings.trading_mode.value=="LIVE" and anomalies:
-                self.paused=True;self.reason="market-data anomalies: "+",".join(anomalies)
-                raise RuntimeError(self.reason)
             if c.score<settings.min_technical_score:return f"HOLD {c.snapshot.symbol} score={c.score}"
-            news_ctx=await self.news.get(c.snapshot.symbol)
-            history_ctx=await self.history.get(c.snapshot.symbol)
-            validate_entry_context(c.snapshot,news_ctx,history_ctx,settings.trading_mode)
-            ctx=self.context()
-            ctx["news"]=news_ctx.model_dump(mode="json")
-            ctx["history"]=history_ctx.model_dump(mode="json")
-            ctx["own_previous_trades"]={x.snapshot.symbol:self.learning.evidence(x.snapshot.symbol) for x in eligible}
-            result=await self.ai.run(eligible,ctx)
-            c=result.candidate or c
-            self.db.decision("gemini",result.gemini);self.db.decision("openai",result.openai)
-            self.last=(f"Gemini={result.gemini.action.value}/{result.gemini.confidence:.2f} "
-              f"OpenAI={result.openai.action.value}/{result.openai.confidence:.2f} "
-              f"agreement={result.score}% approved={result.approved}")
-            if not result.approved or result.final is None:
-                if result.reasons:self.last+=" reasons="+",".join(result.reasons)
-                return self.last
-            d=result.final
-            n,pnl=self.db.today(datetime.now(settings.tz).date().isoformat())
-            try:o=self.risk.validate(c,d,self.db.positions(),n,pnl)
-            except Reject as e:return self.last+" REJECTED "+str(e)
-            filled=await self.verify(await self.broker.enter(o))
-            pos=Position(symbol=o.symbol,qty=o.qty,side=o.action,avg_price=filled.avg_price or o.entry,
-              stop=o.stop,target=o.target,opened_at=datetime.now(settings.tz),broker_id=filled.broker_id)
-            pos.stop_order_id=await self.broker.place_protective_stop(pos)
-            self.db.save_pos(pos);await self.notify(f"ENTRY {pos.side.value} {pos.qty} {pos.symbol} @ {pos.avg_price}")
-            return "opened "+pos.symbol
+            return await self._decide_and_enter(c,eligible)
+    async def _resolve(self,symbol):
+        symbol=symbol.upper()
+        i=next((x for x in settings.instruments if x.symbol==symbol),None)
+        if i is not None:return i
+        if hasattr(self.market,"resolve"):return await self.market.resolve(symbol)
+        return None
+    async def pick(self,symbol):
+        async with self.lock:
+            if self.paused:return "paused: "+self.reason
+            if self.db.positions():return "position exists"
+            i=await self._resolve(symbol)
+            if i is None:return f"{symbol} not found or not intraday-tradeable on NSE"
+            c=score(await self.market.snapshot(i))
+            self.last_candidates=[c]
+            return await self._decide_and_enter(c,[c],skip_score_gate=True)
+    async def check_delivery(self,symbol):
+        # Advisory only - never places an order or touches positions, so it
+        # deliberately skips the trading lock/gates and the data-policy staleness
+        # gate (a freshly-listed symbol may not have min_history_candles yet,
+        # which is fine for an opinion but would hard-block a real entry).
+        i=await self._resolve(symbol)
+        if i is None:return f"{symbol} not found or not intraday-tradeable on NSE"
+        c=score(await self.market.snapshot(i))
+        news_ctx=await self.news.get(c.snapshot.symbol)
+        history_ctx=await self.history.get(c.snapshot.symbol)
+        ctx=self.context()
+        ctx["news"]=news_ctx.model_dump(mode="json")
+        ctx["history"]=history_ctx.model_dump(mode="json")
+        ctx["own_previous_trades"]={c.snapshot.symbol:self.learning.evidence(c.snapshot.symbol)}
+        result=await self.ai.run([c],ctx)
+        conf=min(result.gemini.confidence,result.openai.confidence)
+        good=result.gemini.action==Action.BUY and result.openai.action==Action.BUY and conf>=settings.delivery_check_min_confidence
+        verdict="YES - good to hold overnight" if good else "NO - not confident enough to hold overnight"
+        return (f"{verdict}\n{c.snapshot.symbol}: Gemini={result.gemini.action.value}/{result.gemini.confidence:.2f} "
+          f"OpenAI={result.openai.action.value}/{result.openai.confidence:.2f} "
+          f"(needs both BUY and confidence>={settings.delivery_check_min_confidence:.2f})")
+    async def _decide_and_enter(self,c,eligible,skip_score_gate=False):
+        anomalies=analyze_snapshot(c.snapshot)
+        if settings.trading_mode.value=="LIVE" and anomalies:
+            self.paused=True;self.reason="market-data anomalies: "+",".join(anomalies)
+            raise RuntimeError(self.reason)
+        news_ctx=await self.news.get(c.snapshot.symbol)
+        history_ctx=await self.history.get(c.snapshot.symbol)
+        validate_entry_context(c.snapshot,news_ctx,history_ctx,settings.trading_mode)
+        ctx=self.context()
+        ctx["news"]=news_ctx.model_dump(mode="json")
+        ctx["history"]=history_ctx.model_dump(mode="json")
+        ctx["own_previous_trades"]={x.snapshot.symbol:self.learning.evidence(x.snapshot.symbol) for x in eligible}
+        result=await self.ai.run(eligible,ctx)
+        c=result.candidate or c
+        self.db.decision("gemini",result.gemini);self.db.decision("openai",result.openai)
+        self.last=(f"Gemini={result.gemini.action.value}/{result.gemini.confidence:.2f} "
+          f"OpenAI={result.openai.action.value}/{result.openai.confidence:.2f} "
+          f"agreement={result.score}% approved={result.approved}")
+        if not result.approved or result.final is None:
+            if result.reasons:self.last+=" reasons="+",".join(result.reasons)
+            return self.last
+        d=result.final
+        n,pnl=self.db.today(datetime.now(settings.tz).date().isoformat())
+        try:o=self.risk.validate(c,d,self.db.positions(),n,pnl,skip_score_gate=skip_score_gate)
+        except Reject as e:return self.last+" REJECTED "+str(e)
+        filled=await self.verify(await self.broker.enter(o))
+        pos=Position(symbol=o.symbol,qty=o.qty,side=o.action,avg_price=filled.avg_price or o.entry,
+          stop=o.stop,target=o.target,opened_at=datetime.now(settings.tz),broker_id=filled.broker_id)
+        pos.peak_price=pos.avg_price;pos.initial_stop=pos.stop
+        pos.stop_order_id=await self.broker.place_protective_stop(pos)
+        self.db.save_pos(pos);await self.notify(f"ENTRY {pos.side.value} {pos.qty} {pos.symbol} @ {pos.avg_price}")
+        return "opened "+pos.symbol
     async def _close_position(self,p,ltp,reason):
         x=await self.verify(await self.broker.exit(p,ltp,reason));ep=x.avg_price or ltp
         cost_bps=settings.paper_cost_bps if settings.trading_mode==Mode.PAPER else settings.live_cost_bps

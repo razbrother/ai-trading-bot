@@ -23,14 +23,28 @@ def make_candles(n=40):
         rows.append([ts,p,p+0.5,p-0.5,p+0.2,1000+i,None])
     return rows
 
+def make_instrument_master():
+    import pandas as pd
+    return pd.DataFrame([
+        {"exchange":"NSE","segment":"CASH","series":"EQ","trading_symbol":"MVELECTRO",
+         "exchange_token":"764397","is_intraday":"1","buy_allowed":"1"},
+        {"exchange":"NSE","segment":"CASH","series":"EQ","trading_symbol":"NOTINTRADAY",
+         "exchange_token":"111","is_intraday":"0","buy_allowed":"1"},
+        {"exchange":"BSE","segment":"CASH","series":"B","trading_symbol":"MVELECTRO",
+         "exchange_token":"544851","is_intraday":"1","buy_allowed":"1"},
+    ])
+
 class FakeApi:
     EXCHANGE_NSE="NSE";SEGMENT_CASH="CASH"
-    def __init__(self,quote,candles,nifty=NIFTY_QUOTE):
+    def __init__(self,quote,candles,nifty=NIFTY_QUOTE,instruments=None):
         self.quote=quote;self.candles=candles;self.nifty=nifty
+        self.instruments=instruments if instruments is not None else make_instrument_master()
     def get_quote(self,trading_symbol,**k):
         return dict(self.nifty) if trading_symbol=="NIFTY" else dict(self.quote)
     def get_historical_candles(self,**k):
         return {"candles":self.candles}
+    def get_all_instruments(self):
+        return self.instruments
 
 @pytest.mark.asyncio
 async def test_snapshot_raises_when_no_clean_candles():
@@ -64,4 +78,31 @@ async def test_indicators_are_cached_between_calls():
     m=GrowwMarket(api)
     i=Instrument(symbol="WIPRO",exchange_token="3787")
     await m.snapshot(i);await m.snapshot(i)
+    assert calls[0]==1
+
+@pytest.mark.asyncio
+async def test_resolve_finds_nse_intraday_symbol():
+    m=GrowwMarket(FakeApi(REAL_QUOTE,make_candles()))
+    i=await m.resolve("mvelectro")
+    assert i.symbol=="MVELECTRO" and i.exchange_token=="764397"
+
+@pytest.mark.asyncio
+async def test_resolve_returns_none_for_non_intraday_symbol():
+    m=GrowwMarket(FakeApi(REAL_QUOTE,make_candles()))
+    assert await m.resolve("NOTINTRADAY") is None
+
+@pytest.mark.asyncio
+async def test_resolve_returns_none_for_unknown_symbol():
+    m=GrowwMarket(FakeApi(REAL_QUOTE,make_candles()))
+    assert await m.resolve("NOSUCHSTOCK") is None
+
+@pytest.mark.asyncio
+async def test_resolve_caches_instrument_master_between_calls():
+    api=FakeApi(REAL_QUOTE,make_candles())
+    calls=[0]
+    orig=api.get_all_instruments
+    def counting():calls[0]+=1;return orig()
+    api.get_all_instruments=counting
+    m=GrowwMarket(api)
+    await m.resolve("MVELECTRO");await m.resolve("NOTINTRADAY")
     assert calls[0]==1

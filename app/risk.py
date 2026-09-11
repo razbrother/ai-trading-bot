@@ -4,11 +4,11 @@ from app.models import Action,ValidOrder
 
 class Reject(ValueError):pass
 class Risk:
-    def validate(self,c,d,positions,trades,pnl):
+    def validate(self,c,d,positions,trades,pnl,skip_score_gate=False):
         now=datetime.now(settings.tz);s=c.snapshot
         if not(settings.tm(settings.entry_start)<=now.time()<=settings.tm(settings.last_entry)):raise Reject("time")
         if (now-s.timestamp.astimezone(settings.tz)).total_seconds()>settings.max_signal_age_seconds:raise Reject("stale")
-        if c.score<settings.min_technical_score:raise Reject("score")
+        if not skip_score_gate and c.score<settings.min_technical_score:raise Reject("score")
         if d.confidence<settings.ai_min_confidence:raise Reject("confidence")
         if d.action not in {Action.BUY,Action.SELL}:raise Reject("not entry")
         if len(positions)>=settings.max_open_positions:raise Reject("open position limit")

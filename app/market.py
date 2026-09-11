@@ -1,7 +1,7 @@
 import random
 from datetime import datetime
 from app.settings import settings
-from app.models import Snapshot,Candidate
+from app.models import Snapshot,Candidate,Instrument
 
 class MockMarket:
     def __init__(self,seed=42): self.r=random.Random(seed);self.prices={}
@@ -16,6 +16,10 @@ class MockMarket:
           ema21=round(ltp*(1-t*.003),2),rsi=round(50+t*18,2),atr=round(atr,2),
           index_change=round(t*.5,2),sector_change=round(t*.7,2),news_risk="LOW",source="MOCK")
     async def snapshots(self,items): return [await self.snapshot(i) for i in items]
+    async def resolve(self,symbol):
+        # No real instrument master in mock mode - any symbol is accepted so
+        # manual /trade and /delivery commands stay usable without Groww creds.
+        return Instrument(symbol=symbol.upper(),exchange_token="0")
 
 def score(s):
     n=0;r=[]

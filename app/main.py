@@ -285,6 +285,32 @@ async def run() -> None:
             text = "FAILED " + str(exc)
         await update.message.reply_text(text)
 
+    async def trade(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /trade SYMBOL")
+            return
+        try:
+            text = await engine.pick(context.args[0])
+        except Exception as exc:
+            text = "FAILED " + str(exc)
+        await update.message.reply_text(text)
+
+    async def delivery(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /delivery SYMBOL")
+            return
+        try:
+            text = await engine.check_delivery(context.args[0])
+        except Exception as exc:
+            text = "FAILED " + str(exc)
+        await update.message.reply_text(text)
+
     async def settings_cmd(update, context) -> None:
         if authorized(update):
             await update.message.reply_text(settings_text(opts))
@@ -325,6 +351,8 @@ async def run() -> None:
         "report": report,
         "decision": decision,
         "reconcile": reconcile,
+        "trade": trade,
+        "delivery": delivery,
     }
     for name, handler in handlers.items():
         app.add_handler(CommandHandler(name, handler))
