@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     live_require_margin_check:bool=True; live_require_broker_stop:bool=True
     live_require_startup_reconciliation:bool=True
     single_instance_lock:str="/tmp/ai-trading-bot.lock"
+    trailing_stop_enabled:bool=True
+    trailing_atr_multiple:float=Field(default=1.5,gt=0)
+    delivery_check_min_confidence:float=Field(default=.75,ge=0,le=1)
+    momentum_min_volume_ratio:float=Field(default=1.1,ge=0)
+    momentum_stall_tighten_factor:float=Field(default=.5,gt=0,le=1)
+    target_extend_trigger_atr:float=Field(default=.5,gt=0)
+    breakeven_trigger_r:float=Field(default=1.0,gt=0)
+    eod_tighten_minutes:int=Field(default=15,ge=0)
+    eod_tighten_factor:float=Field(default=.5,gt=0,le=1)
+    early_invalidation_enabled:bool=True
+    early_invalidation_window_seconds:int=Field(default=300,ge=0)
+    early_invalidation_risk_fraction:float=Field(default=.5,ge=0,le=1)
     @property
     def tz(self): return ZoneInfo(self.timezone)
     def tm(self,s): h,m=map(int,s.split(":")); return time(h,m)

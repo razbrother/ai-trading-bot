@@ -86,6 +86,49 @@ class Engine:
         costs=(p.avg_price+ep)*p.qty*cost_bps/10000
         net=self.db.close(p,ep,costs,reason);await self.notify(f"EXIT {p.symbol} net ₹{net:.2f}")
         return net
+    def _momentum_favorable(self,p,s):
+        fav=s.ema9>s.ema21 if p.side==Action.BUY else s.ema9<s.ema21
+        return fav and s.volume_ratio>=settings.momentum_min_volume_ratio
+    async def _trail(self,p,s):
+        if not settings.trailing_stop_enabled:return
+        peak=p.peak_price or p.avg_price
+        favorable=self._momentum_favorable(p,s)
+        mult=settings.trailing_atr_multiple
+        if not favorable:mult*=settings.momentum_stall_tighten_factor
+        now=datetime.now(settings.tz)
+        fe=datetime.combine(now.date(),settings.tm(settings.force_exit),tzinfo=settings.tz)
+        mins_left=(fe-now).total_seconds()/60
+        if 0<=mins_left<=settings.eod_tighten_minutes:mult*=settings.eod_tighten_factor
+        risk=abs(p.avg_price-(p.initial_stop or p.stop))
+        if p.side==Action.BUY:
+            peak=max(peak,s.ltp);new_stop=round(peak-mult*s.atr,2)
+            if risk>0 and peak-p.avg_price>=settings.breakeven_trigger_r*risk:
+                new_stop=max(new_stop,p.avg_price)
+            moved=new_stop>p.stop
+            if favorable and p.target-s.ltp<=settings.target_extend_trigger_atr*s.atr:
+                p.target=round(p.target+settings.trailing_atr_multiple*s.atr,2)
+        else:
+            peak=min(peak,s.ltp);new_stop=round(peak+mult*s.atr,2)
+            if risk>0 and p.avg_price-peak>=settings.breakeven_trigger_r*risk:
+                new_stop=min(new_stop,p.avg_price)
+            moved=new_stop<p.stop
+            if favorable and s.ltp-p.target<=settings.target_extend_trigger_atr*s.atr:
+                p.target=round(p.target-settings.trailing_atr_multiple*s.atr,2)
+        p.peak_price=peak
+        if moved:
+            old=p.stop;p.stop=new_stop
+            if p.stop_order_id:
+                try:p.stop_order_id=await self.broker.update_protective_stop(p)
+                except Exception:
+                    p.stop=old
+                    await self.notify(f"WARN trail stop update failed {p.symbol}")
+    async def _early_invalidation(self,p,s):
+        if not settings.early_invalidation_enabled or p.initial_stop is None:return False
+        if (datetime.now(settings.tz)-p.opened_at).total_seconds()>settings.early_invalidation_window_seconds:return False
+        planned_risk=abs(p.avg_price-p.initial_stop)
+        if planned_risk<=0:return False
+        adverse=(p.avg_price-s.ltp) if p.side==Action.BUY else (s.ltp-p.avg_price)
+        return adverse>=settings.early_invalidation_risk_fraction*planned_risk and not self._momentum_favorable(p,s)
     async def monitor(self):
         for p in self.db.positions():
             i=next((x for x in settings.instruments if x.symbol==p.symbol),None)
@@ -94,6 +137,7 @@ class Engine:
                 await self.notify("EMERGENCY PAUSE\n"+self.reason);continue
             s=await self.market.snapshot(i)
             p.ltp=s.ltp;p.upnl=((s.ltp-p.avg_price) if p.side==Action.BUY else (p.avg_price-s.ltp))*p.qty
+            await self._trail(p,s)
             self.db.save_pos(p);reason=None
             if p.side==Action.BUY:
                 if s.ltp<=p.stop:reason="STOP"
@@ -101,6 +145,7 @@ class Engine:
             else:
                 if s.ltp>=p.stop:reason="STOP"
                 elif s.ltp<=p.target:reason="TARGET"
+            if not reason and await self._early_invalidation(p,s):reason="EARLY_INVALIDATION"
             if datetime.now(settings.tz).time()>=settings.tm(settings.force_exit):reason="FORCE_EXIT"
             if reason:await self._close_position(p,s.ltp,reason)
     async def close_all(self,reason="EMERGENCY"):

@@ -34,6 +34,7 @@ class PaperBroker:
           filled_qty=p.qty,requested_price=price,avg_price=avg,status="FILLED",message=reason,
           updated_at=datetime.now(settings.tz));self.orders[x.broker_id]=x;self.pos.pop(p.symbol,None);return x
     async def place_protective_stop(self,p):return None
+    async def update_protective_stop(self,p):return p.stop_order_id
 
 class GrowwBroker:
     def __init__(self):
@@ -104,5 +105,15 @@ class GrowwBroker:
         return self._to_broker_order(rec,price)
     async def place_protective_stop(self,p):
         if not settings.live_require_broker_stop:return None
+        rec=await self.exec.place_stop_loss(p.symbol,p.qty,p.side,p.stop)
+        return rec.broker_order_id
+    async def update_protective_stop(self,p):
+        # The Groww SDK wrapper has no modify-order call, so trailing the broker-side
+        # stop means cancel the resting one and place a fresh one at the new trigger.
+        if not settings.live_require_broker_stop or not p.stop_order_id:return p.stop_order_id
+        old=ExecutionRecord(reference_id="cancel-"+uuid.uuid4().hex[:8],symbol=p.symbol,
+          side=(Action.SELL if p.side==Action.BUY else Action.BUY).value,requested_qty=p.qty,
+          broker_order_id=p.stop_order_id,updated_at=datetime.now(settings.tz))
+        await self.exec.cancel(old)
         rec=await self.exec.place_stop_loss(p.symbol,p.qty,p.side,p.stop)
         return rec.broker_order_id
