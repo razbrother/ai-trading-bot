@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 from app.settings import settings
-from app.models import Action,Mode,Position,Status
+from app.models import Action,Decision,Mode,Position,Status
 from app.market import score
 from app.risk import Reject
 from app.data_policy import validate_entry_context, DataPolicyError
@@ -73,6 +73,49 @@ class Engine:
             c=score(await self.market.snapshot(i))
             self.last_candidates=[c]
             return await self._decide_and_enter(c,[c],skip_score_gate=True)
+    async def manual(self,symbol,action):
+        # User-directed BUY/SELL: gated on auto-trading being ON (same safety
+        # switch as the automated path) rather than a separate /confirm step.
+        # Stop/target are computed from the same ATR-based risk math the AI
+        # path uses (midpoint of the allowed stop-ATR range, reward at the
+        # configured min reward:risk), then run through the normal risk gate -
+        # only the AI's own BUY/SELL/confidence choice is skipped.
+        async with self.lock:
+            if not self.auto:return "Auto trading is off. Run /start_auto first to use /buy and /sell."
+            if self.paused:return "paused: "+self.reason
+            if self.db.positions():return "position exists"
+            i=await self._resolve(symbol)
+            if i is None:return f"{symbol} not found or not intraday-tradeable on NSE"
+            s=await self.market.snapshot(i)
+            c=score(s)
+            self.last_candidates=[c]
+            anomalies=analyze_snapshot(s)
+            if settings.trading_mode.value=="LIVE" and anomalies:
+                self.paused=True;self.reason="market-data anomalies: "+",".join(anomalies)
+                raise RuntimeError(self.reason)
+            news_ctx=await self.news.get(s.symbol)
+            history_ctx=await self.history.get(s.symbol)
+            validate_entry_context(s,news_ctx,history_ctx,settings.trading_mode)
+            mult=(settings.min_stop_atr_multiple+settings.max_stop_atr_multiple)/2
+            risk_per_share=mult*s.atr;reward_per_share=settings.min_reward_risk*risk_per_share
+            if action==Action.BUY:
+                entry=s.ltp;stop=round(entry-risk_per_share,2);target=round(entry+reward_per_share,2)
+            else:
+                entry=s.ltp;stop=round(entry+risk_per_share,2);target=round(entry-reward_per_share,2)
+            d=Decision(action=action,symbol=s.symbol,entry=entry,stop=stop,target=target,
+              confidence=1.0,hold_minutes=30,reasons=["manual"],rationale="Manual user-directed trade")
+            n,pnl=self.db.today(datetime.now(settings.tz).date().isoformat())
+            try:o=self.risk.validate(c,d,self.db.positions(),n,pnl,skip_score_gate=True)
+            except Reject as e:return "REJECTED "+str(e)
+            filled=await self.verify(await self.broker.enter(o))
+            pos=Position(symbol=o.symbol,qty=o.qty,side=o.action,avg_price=filled.avg_price or o.entry,
+              stop=o.stop,target=o.target,opened_at=datetime.now(settings.tz),broker_id=filled.broker_id)
+            pos.peak_price=pos.avg_price;pos.initial_stop=pos.stop
+            pos.stop_order_id=await self.broker.place_protective_stop(pos)
+            self.db.save_pos(pos)
+            await self.notify(f"MANUAL {pos.side.value} {pos.qty} {pos.symbol} @ {pos.avg_price}")
+            return (f"opened {pos.symbol} {pos.side.value} qty={pos.qty} "
+              f"entry={pos.avg_price} stop={pos.stop} target={pos.target}")
     async def check_delivery(self,symbol):
         # Advisory only - never places an order or touches positions, so it
         # deliberately skips the trading lock/gates and the data-policy staleness

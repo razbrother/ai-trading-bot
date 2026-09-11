@@ -11,7 +11,7 @@ from app.broker import GrowwBroker, PaperBroker
 from app.db import DB
 from app.engine import Engine
 from app.health import HealthService
-from app.models import Mode
+from app.models import Action, Mode
 from app.risk import Risk
 from app.runtime import RuntimeOptions, build_sources
 from app.settings import settings
@@ -298,6 +298,32 @@ async def run() -> None:
             text = "FAILED " + str(exc)
         await update.message.reply_text(text)
 
+    async def buy(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /buy SYMBOL")
+            return
+        try:
+            text = await engine.manual(context.args[0], Action.BUY)
+        except Exception as exc:
+            text = "FAILED " + str(exc)
+        await update.message.reply_text(text)
+
+    async def sell(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /sell SYMBOL")
+            return
+        try:
+            text = await engine.manual(context.args[0], Action.SELL)
+        except Exception as exc:
+            text = "FAILED " + str(exc)
+        await update.message.reply_text(text)
+
     async def delivery(update, context) -> None:
         if not authorized(update):
             await reject(update)
@@ -365,6 +391,8 @@ async def run() -> None:
         "decision": decision,
         "reconcile": reconcile,
         "trade": trade,
+        "buy": buy,
+        "sell": sell,
         "delivery": delivery,
         "ask": ask,
     }
