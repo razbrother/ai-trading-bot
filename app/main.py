@@ -207,9 +207,37 @@ async def run() -> None:
             f"Reason={engine.reason or '-'}\n{engine.context()}"
         )
 
+    async def _do_start() -> str:
+        engine.auto = True
+        engine.paused = False
+        engine.reason = ""
+        return "Auto trading enabled"
+
+    async def _do_emergency() -> str:
+        engine.auto = False
+        engine.paused = True
+        engine.reason = "manual emergency"
+        try:
+            closed = await engine.close_all("EMERGENCY")
+            return (
+                f"Emergency pause active. Closed: {', '.join(closed)}."
+                if closed
+                else "Emergency pause active. No open positions to close."
+            )
+        except Exception as exc:
+            return (
+                "Emergency pause active, but closing positions failed: "
+                f"{exc}. Verify broker positions manually."
+            )
+
     async def start_auto(update, context) -> None:
         if not authorized(update):
             await reject(update)
+            return
+        if mode == Mode.PAPER:
+            # No real money at risk in paper mode - the /confirm step exists to
+            # catch accidental taps, not to gate trade quality, so skip it here.
+            await update.message.reply_text(await _do_start())
             return
         code = confirmations.create(update.effective_user.id, "START")
         await update.message.reply_text(
@@ -230,6 +258,9 @@ async def run() -> None:
         if not authorized(update):
             await reject(update)
             return
+        if mode == Mode.PAPER:
+            await update.message.reply_text(await _do_emergency())
+            return
         code = confirmations.create(update.effective_user.id, "EMERGENCY")
         await update.message.reply_text(
             f"Reply /confirm {code} within "
@@ -245,27 +276,9 @@ async def run() -> None:
             " ".join(context.args),
         )
         if action == "START":
-            engine.auto = True
-            engine.paused = False
-            engine.reason = ""
-            await update.message.reply_text("Auto trading enabled")
+            await update.message.reply_text(await _do_start())
         elif action == "EMERGENCY":
-            engine.auto = False
-            engine.paused = True
-            engine.reason = "manual emergency"
-            try:
-                closed = await engine.close_all("EMERGENCY")
-                text = (
-                    f"Emergency pause active. Closed: {', '.join(closed)}."
-                    if closed
-                    else "Emergency pause active. No open positions to close."
-                )
-            except Exception as exc:
-                text = (
-                    "Emergency pause active, but closing positions failed: "
-                    f"{exc}. Verify broker positions manually."
-                )
-            await update.message.reply_text(text)
+            await update.message.reply_text(await _do_emergency())
         else:
             await update.message.reply_text("Invalid or expired confirmation")
 
