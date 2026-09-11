@@ -1,4 +1,4 @@
-import asyncio,json
+import asyncio,json,logging
 from pydantic import BaseModel,Field,model_validator
 from app.settings import settings
 from app.models import Decision,Action
@@ -17,7 +17,7 @@ class HeuristicAI:
         c=cs[0];s=c.snapshot
         return Selection(selected_rank=1,decision=Decision(action='BUY',symbol=s.symbol,entry=s.ltp,stop=round(s.ltp-s.atr,2),target=round(s.ltp+1.8*s.atr,2),confidence=.86,reasons=c.reasons,rationale=self.name))
 class GeminiAI:
-    def __init__(self):self.limiter=DailyCallLimiter(settings.gemini_max_calls_per_day,settings.tz)
+    def __init__(self,notify=None):self.limiter=DailyCallLimiter(settings.gemini_max_calls_per_day,settings.tz,notify,settings.ai_budget_warn_at)
     async def select(self,cs,ctx):
         await self.limiter.acquire('Gemini')
         from google import genai
@@ -26,7 +26,7 @@ class GeminiAI:
             x=client.interactions.create(model=settings.gemini_model,input=RULES+'\n'+json.dumps(payload,default=str),response_format={'type':'text','mime_type':'application/json','schema':Selection.model_json_schema()});return Selection.model_validate_json(x.output_text)
         return await asyncio.to_thread(f)
 class OpenAITrader:
-    def __init__(self):self.limiter=DailyCallLimiter(settings.openai_max_calls_per_day,settings.tz)
+    def __init__(self,notify=None):self.limiter=DailyCallLimiter(settings.openai_max_calls_per_day,settings.tz,notify,settings.ai_budget_warn_at)
     async def select(self,cs,ctx):
         await self.limiter.acquire('OpenAI')
         from openai import OpenAI
@@ -49,7 +49,12 @@ class DualConsensus:
         return Selection(decision=d,selected_rank=1 if d.action!=Action.HOLD else None)
     async def run(self,cs,ctx):
         if not isinstance(cs,list): cs=[cs]
-        gs,os=await asyncio.gather(self._call(self.g,cs,ctx),self._call(self.o,cs,ctx));g,o=gs.decision,os.decision;reasons=[];score=0;cmap={c.snapshot.symbol:c for c in cs}
+        gs=await self._call(self.g,cs,ctx)
+        try:os=await self._call(self.o,cs,ctx)
+        except Exception:
+            logging.warning("secondary AI provider failed; falling back to Gemini-only for this cycle",exc_info=True)
+            os=gs
+        g,o=gs.decision,os.decision;reasons=[];score=0;cmap={c.snapshot.symbol:c for c in cs}
         if g.action==Action.HOLD or o.action==Action.HOLD:return Result(False,None,g,o,0,['HOLD'])
         if g.symbol==o.symbol and g.symbol in cmap:score+=25
         else:reasons.append('SYMBOL_MISMATCH')
@@ -65,3 +70,20 @@ class DualConsensus:
         stop=min(g.stop,o.stop) if g.action==Action.BUY else max(g.stop,o.stop);target=min(g.target,o.target) if g.action==Action.BUY else max(g.target,o.target)
         f=Decision(action=g.action,symbol=g.symbol,entry=s.ltp,stop=stop,target=target,confidence=min(g.confidence,o.confidence),reasons=sorted(set(g.reasons+o.reasons)),rationale=f'dual agreement {score}')
         return Result(True,f,g,o,score,reasons,c)
+ASK_RULES=('Answer the question using only the supplied JSON context about this trading bot '
+  'account. Be concise and factual. Never invent numbers, positions, or trades not present in '
+  'the context. If the context does not contain enough information to answer, say so plainly.')
+class PortfolioAssistant:
+    """Free-form Q&A over the bot's own state (positions, P&L, recent decisions) - a
+    separate, smaller daily budget from the trading-decision AI calls, since casual
+    questions shouldn't eat into the budget that gates actual trades."""
+    def __init__(self,notify=None):self.limiter=DailyCallLimiter(settings.ask_max_calls_per_day,settings.tz,notify,settings.ai_budget_warn_at)
+    async def answer(self,question,context):
+        if not settings.gemini_api_key:return "GEMINI_API_KEY not configured; /ask is unavailable."
+        await self.limiter.acquire('PortfolioAsk')
+        from google import genai
+        client=genai.Client(api_key=settings.gemini_api_key)
+        prompt=f"{ASK_RULES}\n{json.dumps(context,default=str)}\n\nQuestion: {question}"
+        def f():
+            x=client.interactions.create(model=settings.gemini_model,input=prompt);return x.output_text
+        return await asyncio.to_thread(f)

@@ -82,6 +82,8 @@ class Settings(BaseSettings):
     groww_nontrading_rpm:int=300
     openai_max_calls_per_day:int=30
     gemini_max_calls_per_day:int=30
+    ask_max_calls_per_day:int=30
+    ai_budget_warn_at:float=Field(default=.8,gt=0,le=1)
     @property
     def news_term_map(self):
         out={}

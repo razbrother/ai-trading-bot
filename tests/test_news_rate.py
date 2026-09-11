@@ -12,6 +12,27 @@ async def test_limiter():
 async def test_daily_call_limiter_caps():
     lim=DailyCallLimiter(2,settings.tz);await lim.acquire();await lim.acquire()
     with pytest.raises(RuntimeError):await lim.acquire()
+@pytest.mark.asyncio
+async def test_daily_call_limiter_warns_once_at_threshold():
+    warnings=[]
+    async def notify(t):warnings.append(t)
+    lim=DailyCallLimiter(10,settings.tz,notify,warn_at=.8)
+    for _ in range(7):await lim.acquire()
+    assert not warnings
+    await lim.acquire()  # 8/10 = 80%, crosses threshold
+    assert len(warnings)==1 and "8/10" in warnings[0]
+    await lim.acquire();await lim.acquire()
+    assert len(warnings)==1  # doesn't re-warn every call after crossing
+@pytest.mark.asyncio
+async def test_daily_call_limiter_warning_resets_next_day(monkeypatch):
+    warnings=[]
+    async def notify(t):warnings.append(t)
+    lim=DailyCallLimiter(2,settings.tz,notify,warn_at=.5)
+    await lim.acquire()
+    assert len(warnings)==1
+    lim.day=None  # simulate day rollover
+    await lim.acquire()
+    assert len(warnings)==2
 def test_news_terms():
     assert settings.news_term_map["SBIN"]=="State Bank of India"
 @pytest.mark.asyncio

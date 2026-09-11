@@ -18,12 +18,19 @@ class RollingRateLimiter:
                 await asyncio.sleep(max(.01,min(waits)))
 
 class DailyCallLimiter:
-    """Caps calls per local calendar day; resets automatically at day rollover."""
-    def __init__(self,max_per_day,tz):
+    """Caps calls per local calendar day; resets automatically at day rollover.
+    Optionally warns once per day (via an async notify callback) on crossing
+    warn_at fraction of the cap, so usage doesn't just silently fail later."""
+    def __init__(self,max_per_day,tz,notify=None,warn_at=.8):
         self.max=max_per_day;self.tz=tz;self.day=None;self.count=0;self.lock=asyncio.Lock()
+        self.notify=notify;self.warn_at=warn_at;self.warned=False
     async def acquire(self,label="call"):
         async with self.lock:
             today=datetime.now(self.tz).date()
-            if today!=self.day:self.day=today;self.count=0
+            if today!=self.day:self.day=today;self.count=0;self.warned=False
             if self.count>=self.max:raise RuntimeError(f"Daily {label} cap reached ({self.max}/day)")
             self.count+=1
+            if self.notify and not self.warned and self.max>0 and self.count>=self.warn_at*self.max:
+                self.warned=True
+                try:await self.notify(f"WARNING: {label} API usage at {self.count}/{self.max} calls today ({self.warn_at*100:.0f}% of daily cap)")
+                except Exception:pass

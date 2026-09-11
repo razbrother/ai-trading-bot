@@ -52,10 +52,10 @@ def args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_ai() -> DualConsensus:
-    primary = GeminiAI() if settings.gemini_api_key else HeuristicAI("gemini-test")
+def build_ai(notify) -> DualConsensus:
+    primary = GeminiAI(notify) if settings.gemini_api_key else HeuristicAI("gemini-test")
     if settings.openai_api_key:
-        secondary = OpenAITrader()
+        secondary = OpenAITrader(notify)
     elif settings.gemini_api_key:
         # No second real provider configured yet. Both slots run Gemini so the
         # pipeline is usable while testing, but this weakens the dual-AI
@@ -67,7 +67,7 @@ def build_ai() -> DualConsensus:
             "both sides. Agreement score no longer reflects independent "
             "model validation."
         )
-        secondary = GeminiAI()
+        secondary = GeminiAI(notify)
     else:
         secondary = HeuristicAI("openai-test")
     return DualConsensus(primary, secondary)
@@ -102,8 +102,6 @@ async def run() -> None:
 
     market, news, history = build_sources(opts, data_broker)
 
-    ai = build_ai()
-
     bot = Bot(settings.telegram_bot_token)
 
     async def notify(text: str) -> None:
@@ -117,6 +115,8 @@ async def run() -> None:
                 logging.exception("Telegram notification failed")
         else:
             logging.info("NOTIFY %s", text)
+
+    ai = build_ai(notify)
 
     engine = Engine(
         market,
@@ -311,6 +311,19 @@ async def run() -> None:
             text = "FAILED " + str(exc)
         await update.message.reply_text(text)
 
+    async def ask(update, context) -> None:
+        if not authorized(update):
+            await reject(update)
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /ask <question>")
+            return
+        try:
+            text = await engine.ask(" ".join(context.args))
+        except Exception as exc:
+            text = "FAILED " + str(exc)
+        await update.message.reply_text(text)
+
     async def settings_cmd(update, context) -> None:
         if authorized(update):
             await update.message.reply_text(settings_text(opts))
@@ -353,6 +366,7 @@ async def run() -> None:
         "reconcile": reconcile,
         "trade": trade,
         "delivery": delivery,
+        "ask": ask,
     }
     for name, handler in handlers.items():
         app.add_handler(CommandHandler(name, handler))

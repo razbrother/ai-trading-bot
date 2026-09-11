@@ -119,6 +119,20 @@ async def test_pick_reports_unresolvable_symbol_from_market(tmp_path,monkeypatch
     assert "not found or not intraday-tradeable" in result
 
 @pytest.mark.asyncio
+async def test_ask_delegates_to_assistant_with_context(tmp_path,monkeypatch):
+    monkeypatch.setattr(settings,"symbols","SBIN:3045")
+    ai=DualConsensus(F(buy_selection(.9)),F(buy_selection(.9)))
+    engine=make_engine(tmp_path,ai,"ask1.db")
+    seen={}
+    async def fake_answer(question,context):
+        seen["question"]=question;seen["context"]=context;return "42"
+    engine.assistant.answer=fake_answer
+    result=await engine.ask("what is my pnl today")
+    assert result=="42"
+    assert seen["question"]=="what is my pnl today"
+    assert "report" in seen["context"] and "today" in seen["context"] and "watchlist" in seen["context"]
+
+@pytest.mark.asyncio
 async def test_check_delivery_yes_when_both_buy_and_confident(tmp_path,monkeypatch):
     monkeypatch.setattr(settings,"symbols","SBIN:3045")
     monkeypatch.setattr(settings,"delivery_check_min_confidence",.75)

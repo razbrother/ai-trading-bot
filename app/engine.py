@@ -7,10 +7,12 @@ from app.risk import Reject
 from app.data_policy import validate_entry_context, DataPolicyError
 from app.fake_data_analyzer import analyze_snapshot
 from app.learning import PreviousTradeAnalyzer
+from app.ai import PortfolioAssistant
 
 class Engine:
     def __init__(self,market,news,history,ai,risk,broker,db,notify):
         self.market=market;self.news=news;self.history=history;self.ai=ai;self.risk=risk;self.broker=broker;self.db=db;self.notify=notify
+        self.assistant=PortfolioAssistant(notify)
         self.auto=settings.auto_start
         # paused/reason are DB-backed so an unplanned restart can't silently
         # erase a safety pause caused by a real problem (anomalies, a reconcile
@@ -30,6 +32,11 @@ class Engine:
         n,p=self.db.today(datetime.now(settings.tz).date().isoformat())
         return {"mode":settings.trading_mode.value,"trades_today":n,"pnl":p,
           "positions":[x.model_dump(mode="json") for x in self.db.positions()]}
+    async def ask(self,question):
+        ctx={"report":self.db.report(),"today":self.context(),
+          "watchlist":[{"symbol":c.snapshot.symbol,"score":c.score} for c in self.last_candidates],
+          "last_decision":self.last,"auto":self.auto,"paused":self.paused,"reason":self.reason}
+        return await self.assistant.answer(question,ctx)
     async def verify(self,o):
         self.db.order(o)
         if o.status==Status.FILLED:return o
