@@ -1,0 +1,13 @@
+[Unit]
+Description=AI Trading Bot (PAPER mode, live Groww data)
+After=network-online.target
+[Service]
+User=ec2-user
+WorkingDirectory=/home/ec2-user/ai-trading-bot
+EnvironmentFile=/home/ec2-user/ai-trading-bot/.env
+ExecStart=/home/ec2-user/ai-trading-bot/.venv/bin/python -m app.main --mode paper --market-source groww --news-source none --history-source groww
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target
