@@ -3,13 +3,34 @@ from pydantic import BaseModel,Field,model_validator
 from app.settings import settings
 from app.models import Decision,Action
 from app.rate_limit import DailyCallLimiter
-RULES='Use only supplied verified JSON. Select one candidate or HOLD. Do not invent prices/news/history. For BUY stop<entry<target; SELL target<entry<stop. Confidence is not probability. Never set quantity or override controls.'
+RULES=('Use only supplied verified JSON. Select one candidate or HOLD. Do not invent prices/news/history. '
+  'For BUY stop<entry<target; SELL target<entry<stop. Confidence is not probability. Never set quantity or '
+  'override controls. If action is BUY or SELL, selected_rank is REQUIRED: set it to the 1-based position '
+  '(1, 2, 3...) of the chosen candidate in the supplied candidates list. Only leave selected_rank null when action is HOLD.')
 class Selection(BaseModel):
-    decision:Decision;selected_rank:int|None=Field(default=None,ge=1)
+    decision:Decision
+    selected_rank:int|None=Field(default=None,ge=1,
+      description='Required (1-based position in candidates) when decision.action is BUY or SELL. Null only for HOLD.')
     @model_validator(mode='after')
     def v(self):
         if self.decision.action!=Action.HOLD and self.selected_rank is None:raise ValueError('rank required')
         return self
+async def _select_with_retry(call_once,cs,provider_name):
+    # Structured-output LLM calls occasionally return truncated/degenerate JSON
+    # (e.g. a token-repetition loop cut off before the object closes) rather than
+    # a clean provider error. A couple of retries clears most of these; if it
+    # still fails, degrade to a safe HOLD instead of crashing the scan/pick or
+    # surfacing a raw parser traceback as the trade decision.
+    last_err=None
+    for attempt in range(settings.ai_parse_retry_attempts):
+        try:return await asyncio.to_thread(call_once)
+        except Exception as e:
+            last_err=e
+            logging.warning("%s response failed to parse (attempt %d/%d): %s",
+              provider_name,attempt+1,settings.ai_parse_retry_attempts,e)
+    symbol=cs[0].snapshot.symbol if cs else 'NONE'
+    return Selection(decision=Decision(action='HOLD',symbol=symbol,confidence=0,
+      rationale=f'{provider_name} response unparseable after {settings.ai_parse_retry_attempts} attempts: {last_err}'))
 class HeuristicAI:
     def __init__(self,name='h'):self.name=name
     async def select(self,cs,ctx):
@@ -24,7 +45,7 @@ class GeminiAI:
         client=genai.Client(api_key=settings.gemini_api_key);payload={'candidates':[c.model_dump(mode='json') for c in cs],'context':ctx}
         def f():
             x=client.interactions.create(model=settings.gemini_model,input=RULES+'\n'+json.dumps(payload,default=str),response_format={'type':'text','mime_type':'application/json','schema':Selection.model_json_schema()});return Selection.model_validate_json(x.output_text)
-        return await asyncio.to_thread(f)
+        return await _select_with_retry(f,cs,'Gemini')
 class OpenAITrader:
     def __init__(self,notify=None):self.limiter=DailyCallLimiter(settings.openai_max_calls_per_day,settings.tz,notify,settings.ai_budget_warn_at)
     async def select(self,cs,ctx):
@@ -35,7 +56,7 @@ class OpenAITrader:
             x=client.responses.parse(model=settings.openai_model,instructions=RULES,input=json.dumps(payload,default=str),text_format=Selection)
             if x.output_parsed is None:raise RuntimeError('no parsed selection')
             return x.output_parsed
-        return await asyncio.to_thread(f)
+        return await _select_with_retry(f,cs,'OpenAI')
 class Result:
     def __init__(self,approved,final,g,o,score,reasons,candidate=None):self.approved=approved;self.final=final;self.gemini=g;self.openai=o;self.score=score;self.reasons=reasons;self.candidate=candidate
 class DualConsensus:

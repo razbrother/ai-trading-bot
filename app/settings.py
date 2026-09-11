@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     gemini_max_calls_per_day:int=30
     ask_max_calls_per_day:int=30
     ai_budget_warn_at:float=Field(default=.8,gt=0,le=1)
+    ai_parse_retry_attempts:int=Field(default=2,ge=1)
     @property
     def news_term_map(self):
         out={}
