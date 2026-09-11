@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     telegram_bot_token:str=""; telegram_allowed_user_id:int|None=None
     gemini_api_key:str=""; gemini_model:str="gemini-3.6-flash"
     openai_api_key:str=""; openai_model:str="gpt-5-mini"
-    ai_min_confidence:float=Field(default=.8,ge=0,le=1)
-    ai_first_trade_min_confidence:float=Field(default=.85,ge=0,le=1)
+    ai_min_confidence:float=Field(default=.70,ge=0,le=1)
+    ai_first_trade_min_confidence:float=Field(default=.75,ge=0,le=1)
     ai_min_agreement_score:int=Field(default=85,ge=0,le=100)
     ai_max_entry_diff_pct:float=Field(default=.20,ge=0)
     ai_max_stop_diff_atr:float=Field(default=.30,ge=0)
@@ -21,9 +21,10 @@ class Settings(BaseSettings):
     groww_totp_token:str=""; groww_totp_secret:str=""
     groww_api_key:str=""; groww_api_secret:str=""
     symbols:str="RELIANCE:2885,TCS:11536,INFY:1594,SBIN:3045,ICICIBANK:4963"
-    starting_capital:float=25000; max_risk_per_trade_pct:float=.005
+    starting_capital:float=25000; max_risk_per_trade_pct:float=.02
     max_daily_loss:float=250; hard_daily_profit:float=400
-    max_position_value:float=10000; max_open_positions:int=1; max_trades_per_day:int=2
+    max_position_value:float=100000; max_open_positions:int=1; max_trades_per_day:int=2
+    intraday_leverage_multiple:float=Field(default=4,gt=0)
     min_reward_risk:float=1.5; min_technical_score:int=75; max_spread_pct:float=.15
     max_signal_age_seconds:int=90; min_stop_atr_multiple:float=.5
     max_stop_atr_multiple:float=1.5

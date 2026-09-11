@@ -29,7 +29,8 @@ class Risk:
         rr=reward/ru
         if rr<settings.min_reward_risk:raise Reject("RR")
         allowed=settings.starting_capital*settings.max_risk_per_trade_pct
-        qty=min(int(allowed//ru),int(settings.max_position_value//e),int(settings.starting_capital//e))
+        buying_power=settings.starting_capital*settings.intraday_leverage_multiple
+        qty=min(int(allowed//ru),int(settings.max_position_value//e),int(buying_power//e))
         if qty<1:raise Reject("quantity")
         return ValidOrder(symbol=s.symbol,action=d.action,qty=qty,entry=e,stop=st,target=tg,
           risk=qty*ru,rr=rr,confidence=d.confidence,score=c.score,signal_time=s.timestamp)
