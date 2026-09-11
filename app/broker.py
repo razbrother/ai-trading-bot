@@ -75,8 +75,14 @@ class GrowwBroker:
         # Field names follow the same "trading_symbol"/"quantity" convention the SDK
         # already uses for orders; average-price field is unconfirmed against a real
         # account response and must be checked with the read-only probe before LIVE use.
+        # This bot only ever places MIS (intraday) orders - see place_entry/place_stop_loss/
+        # place_market_exit in groww_execution.py - so CNC/delivery holdings (the account
+        # owner's own trades, unrelated to the bot) are filtered out here rather than
+        # tripping reconcile()'s mismatch pause every time the account holds delivery stock
+        # in a symbol the bot also happens to track intraday.
         raw=await self.exec.positions();out=[]
         for x in raw:
+            if x.get("product")!=self.g.PRODUCT_MIS:continue
             qty=int(x.get("quantity",0) or 0)
             if qty==0:continue
             avg=x.get("average_price",x.get("net_price",x.get("buy_price")))

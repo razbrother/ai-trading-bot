@@ -11,7 +11,7 @@ class Fake:
     ORDER_TYPE_STOP_LOSS_MARKET="SL-M";TRANSACTION_TYPE_BUY="BUY";TRANSACTION_TYPE_SELL="SELL"
     def __init__(self):self.cancelled=[]
     def get_positions_for_user(self,segment=None):
-        return {"positions":[{"trading_symbol":"WIPRO","quantity":2,"average_price":101.5}]}
+        return {"positions":[{"trading_symbol":"WIPRO","quantity":2,"average_price":101.5,"product":"MIS"}]}
     def place_order(self,**k):return {"groww_order_id":"EX1","order_status":"EXECUTED"}
     def get_order_status(self,**k):
         return {"groww_order_id":k.get("groww_order_id"),"order_status":"EXECUTED","filled_quantity":2}
@@ -80,9 +80,22 @@ async def test_positions_mapping():
 @pytest.mark.asyncio
 async def test_positions_missing_avg_price_raises():
     b=make_broker()
-    b.g.get_positions_for_user=lambda segment=None:{"positions":[{"trading_symbol":"WIPRO","quantity":1}]}
+    b.g.get_positions_for_user=lambda segment=None:{"positions":[{"trading_symbol":"WIPRO","quantity":1,"product":"MIS"}]}
     with pytest.raises(RuntimeError):
         await b.positions()
+
+@pytest.mark.asyncio
+async def test_positions_filters_out_cnc_delivery_holdings():
+    # The bot only ever places MIS orders (see place_entry/place_stop_loss/place_market_exit
+    # in groww_execution.py) - CNC/delivery holdings are the account owner's own trades and
+    # must never trip reconcile()'s mismatch pause just because they exist in a tracked symbol.
+    b=make_broker()
+    b.g.get_positions_for_user=lambda segment=None:{"positions":[
+        {"trading_symbol":"WIPRO","quantity":2,"average_price":101.5,"product":"MIS"},
+        {"trading_symbol":"MVELECTRO","quantity":290,"average_price":911.08,"product":"CNC"},
+    ]}
+    out=await b.positions()
+    assert len(out)==1 and out[0].symbol=="WIPRO"
 
 @pytest.mark.asyncio
 async def test_exit_without_stop_order_places_market_exit():
